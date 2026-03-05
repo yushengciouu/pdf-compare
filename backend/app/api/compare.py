@@ -53,7 +53,7 @@ def _validate_pdf(upload: UploadFile) -> None:
 async def create_compare_job(
     before: Annotated[UploadFile, File(...)],
     after: Annotated[UploadFile, File(...)],
-    mode: Annotated[CompareMode, Form()] = "fast",
+    mode: Annotated[CompareMode, Form()] = "smart",
     settings: Settings = Depends(get_settings),
 ) -> CompareCreateResponse:
     _validate_pdf(before)
