@@ -3,7 +3,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 
 from app.core.config import Settings, get_settings
 from app.models.schemas import (
@@ -18,6 +19,7 @@ from app.services.storage import (
     load_meta,
     new_job,
 )
+from app.services.export_result import build_result_pdf
 from app.workers.tasks import run_compare_job
 
 router = APIRouter(prefix="/compare", tags=["compare"])
@@ -164,3 +166,30 @@ def delete_job(job_id: str, settings: Settings = Depends(get_settings)) -> dict:
 @router.post("/maintenance/cleanup")
 def cleanup_jobs(settings: Settings = Depends(get_settings)) -> dict:
     return cleanup_expired_jobs(settings)
+
+
+@router.get("/{job_id}/export")
+def export_compare_result(
+    job_id: str,
+    force: bool = Query(False),
+    settings: Settings = Depends(get_settings),
+) -> FileResponse:
+    job_root = _job_root(settings, job_id)
+    if not job_root.exists():
+        raise HTTPException(status_code=404, detail="找不到任務")
+
+    meta = load_meta(settings, job_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="找不到任務")
+    if meta.get("status") != "done":
+        raise HTTPException(status_code=400, detail="任務尚未完成，無法匯出")
+
+    output_pdf = job_root / "export" / "result_preview.pdf"
+    if force or not output_pdf.exists():
+        output_pdf = build_result_pdf(job_root)
+
+    return FileResponse(
+        output_pdf,
+        media_type="application/pdf",
+        filename=f"compare-{job_id}.pdf",
+    )
