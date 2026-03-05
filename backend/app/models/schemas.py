@@ -50,6 +50,8 @@ class PageAssets(BaseModel):
     before_image: str | None = None
     after_image: str | None = None
     mask_image: str | None = None
+    mask_removed_image: str | None = None
+    mask_added_image: str | None = None
 
 
 class DiffBox(BaseModel):

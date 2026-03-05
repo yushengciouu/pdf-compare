@@ -117,6 +117,8 @@ def compare_images(
         )
 
     rgba = np.zeros((union.shape[0], union.shape[1], 4), dtype=np.uint8)
+    rgba_removed = np.zeros((union.shape[0], union.shape[1], 4), dtype=np.uint8)
+    rgba_added = np.zeros((union.shape[0], union.shape[1], 4), dtype=np.uint8)
     after_added_pixels = after_added_clean > 0
     after_removed_pixels = after_removed_clean > 0
     overlap_pixels = after_added_pixels & after_removed_pixels
@@ -127,9 +129,19 @@ def compare_images(
     rgba[overlap_pixels] = (255, 255, 255, mask_alpha)
     rgba[:, :, 3] = np.where(union > 0, mask_alpha, 0).astype(np.uint8)
 
+    rgba_removed[after_removed_pixels] = (0, 0, 255, mask_alpha)
+    rgba_removed[:, :, 3] = np.where(after_removed_pixels, mask_alpha, 0).astype(
+        np.uint8
+    )
+
+    rgba_added[after_added_pixels] = (255, 255, 0, mask_alpha)
+    rgba_added[:, :, 3] = np.where(after_added_pixels, mask_alpha, 0).astype(np.uint8)
+
     mask_out.parent.mkdir(parents=True, exist_ok=True)
     boxes_out.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(mask_out), rgba)
+    cv2.imwrite(str(mask_out.with_name(mask_out.stem + ".removed.png")), rgba_removed)
+    cv2.imwrite(str(mask_out.with_name(mask_out.stem + ".added.png")), rgba_added)
     with boxes_out.open("w", encoding="utf-8") as f:
         json.dump(boxes, f, ensure_ascii=False, indent=2)
 

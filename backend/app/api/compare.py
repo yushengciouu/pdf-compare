@@ -119,10 +119,22 @@ def get_compare_page(
         after_image = f"/static/jobs/{job_id}/render/after/{int(after_page):04d}.png"
 
     mask_path = job_root / "diff" / "mask" / f"{page_no:04d}.png"
+    mask_removed_path = job_root / "diff" / "mask" / f"{page_no:04d}.removed.png"
+    mask_added_path = job_root / "diff" / "mask" / f"{page_no:04d}.added.png"
     boxes_path = job_root / "diff" / "boxes" / f"{page_no:04d}.json"
     mask_image = (
         f"/static/jobs/{job_id}/diff/mask/{page_no:04d}.png"
         if mask_path.exists()
+        else None
+    )
+    mask_removed_image = (
+        f"/static/jobs/{job_id}/diff/mask/{page_no:04d}.removed.png"
+        if mask_removed_path.exists()
+        else None
+    )
+    mask_added_image = (
+        f"/static/jobs/{job_id}/diff/mask/{page_no:04d}.added.png"
+        if mask_added_path.exists()
         else None
     )
 
@@ -145,6 +157,8 @@ def get_compare_page(
             "before_image": before_image,
             "after_image": after_image,
             "mask_image": mask_image,
+            "mask_removed_image": mask_removed_image,
+            "mask_added_image": mask_added_image,
         },
         "boxes": boxes,
         "width": width,
@@ -184,6 +198,8 @@ def list_compare_pages(job_id: str, settings: Settings = Depends(get_settings)) 
 
         boxes_path = job_root / "diff" / "boxes" / f"{idx:04d}.json"
         mask_path = job_root / "diff" / "mask" / f"{idx:04d}.png"
+        mask_removed_path = job_root / "diff" / "mask" / f"{idx:04d}.removed.png"
+        mask_added_path = job_root / "diff" / "mask" / f"{idx:04d}.added.png"
         boxes = []
         if boxes_path.exists():
             with boxes_path.open("r", encoding="utf-8") as f:
@@ -202,6 +218,12 @@ def list_compare_pages(job_id: str, settings: Settings = Depends(get_settings)) 
                     "after_image": after_image,
                     "mask_image": f"/static/jobs/{job_id}/diff/mask/{idx:04d}.png"
                     if mask_path.exists()
+                    else None,
+                    "mask_removed_image": f"/static/jobs/{job_id}/diff/mask/{idx:04d}.removed.png"
+                    if mask_removed_path.exists()
+                    else None,
+                    "mask_added_image": f"/static/jobs/{job_id}/diff/mask/{idx:04d}.added.png"
+                    if mask_added_path.exists()
                     else None,
                 },
                 "boxes": boxes,

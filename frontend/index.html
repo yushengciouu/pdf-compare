@@ -317,6 +317,12 @@
           <label for="maskOpacity" class="mono">遮罩</label>
           <input id="maskOpacity" class="mini-range" type="range" min="25" max="85" step="5" value="56" />
           <span id="maskOpacityText" class="mono">56%</span>
+          <label for="markMode" class="mono">標記方式</label>
+          <select id="markMode" class="small-select">
+            <option value="all" selected>全部差異</option>
+            <option value="removed">只看左有右無</option>
+            <option value="added">只看右有左無</option>
+          </select>
           <label class="toggle" for="onlyDiffPages">
             <input id="onlyDiffPages" type="checkbox" />
             只看有差異頁
@@ -362,6 +368,7 @@
       const zoomTextEl = document.getElementById("zoomText");
       const maskOpacityEl = document.getElementById("maskOpacity");
       const maskOpacityTextEl = document.getElementById("maskOpacityText");
+      const markModeEl = document.getElementById("markMode");
       const onlyDiffPagesEl = document.getElementById("onlyDiffPages");
       const exportBtn = document.getElementById("exportBtn");
       const beforePane = document.getElementById("beforePane");
@@ -370,6 +377,17 @@
       let currentJobId = null;
       let syncingScroll = false;
       let cachedPages = [];
+      let markMode = "all";
+
+      function applyMarkMode(mode) {
+        markMode = mode || markMode;
+      }
+
+      function pickMaskSource(page) {
+        if (markMode === "removed") return page.assets.mask_removed_image || null;
+        if (markMode === "added") return page.assets.mask_added_image || null;
+        return page.assets.mask_image || null;
+      }
 
       function applyMaskOpacity(value) {
         const v = Number(value);
@@ -567,10 +585,11 @@
           img.decoding = "async";
           wrap.appendChild(img);
 
-          if (page.assets.mask_image) {
+          const maskSrc = pickMaskSource(page);
+          if (maskSrc) {
             const mask = document.createElement("img");
             mask.className = "mask";
-            mask.src = page.assets.mask_image;
+            mask.src = maskSrc;
             mask.alt = `mask slot ${page.page_no}`;
             mask.loading = "lazy";
             mask.decoding = "async";
@@ -676,6 +695,12 @@
       });
 
       maskOpacityEl.addEventListener("input", () => applyMaskOpacity(maskOpacityEl.value));
+      markModeEl.addEventListener("change", () => {
+        applyMarkMode(markModeEl.value);
+        if (cachedPages.length) {
+          renderPages(currentJobId, cachedPages);
+        }
+      });
       onlyDiffPagesEl.addEventListener("change", () => {
         if (cachedPages.length) {
           renderPages(currentJobId, cachedPages);
@@ -683,6 +708,7 @@
       });
 
       applyPageScale(zoomRangeEl.value);
+      applyMarkMode(markModeEl.value);
       submitBtn.addEventListener("click", uploadAndStart);
       exportBtn.addEventListener("click", async () => {
         if (!currentJobId) return;
