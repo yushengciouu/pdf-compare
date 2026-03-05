@@ -1,0 +1,14 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Local runtime artifacts
+var/
+backend/runlogs/
+backend/celerybeat-schedule*
+backend/tmp/
+
+# OS
+.DS_Store
+Thumbs.db

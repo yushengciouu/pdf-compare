@@ -1,0 +1,628 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PDF Compare Viewer</title>
+    <style>
+      :root {
+        --bg: #f2f5f8;
+        --card: #ffffff;
+        --text: #1f2937;
+        --muted: #637083;
+        --line: #d6dde6;
+        --accent: #0868c6;
+        --danger: #b42318;
+        --mask: rgba(255, 64, 64, 0.28);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+        color: var(--text);
+        background: radial-gradient(circle at 0 0, #dbeeff, var(--bg) 45%);
+      }
+      main {
+        max-width: 96vw;
+        margin: 20px auto;
+        padding: 0 16px 24px;
+      }
+      .card {
+        background: var(--card);
+        border-radius: 14px;
+        box-shadow: 0 10px 30px rgba(9, 30, 66, 0.08);
+        border: 1px solid #e8edf3;
+        padding: 16px;
+        margin-bottom: 12px;
+      }
+      h1 {
+        margin: 0 0 4px;
+      }
+      p {
+        margin: 0;
+        color: var(--muted);
+      }
+      .top-grid {
+        display: grid;
+        grid-template-columns: 1.3fr 1.3fr 0.8fr auto;
+        gap: 10px;
+        margin-top: 14px;
+      }
+      .view-controls {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 10px;
+        flex-wrap: wrap;
+      }
+      .view-controls input[type="range"] {
+        width: 220px;
+        min-height: 24px;
+      }
+      .view-controls .small-select {
+        width: 130px;
+        min-height: 34px;
+        padding: 4px 8px;
+      }
+      label {
+        display: block;
+        font-size: 14px;
+        margin-bottom: 6px;
+      }
+      input,
+      select,
+      button {
+        width: 100%;
+        min-height: 40px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        padding: 8px 10px;
+        font-size: 14px;
+      }
+      button {
+        background: var(--accent);
+        border: 0;
+        color: #fff;
+        font-weight: 700;
+        cursor: pointer;
+        min-width: 120px;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      .status {
+        margin-top: 12px;
+        font-size: 14px;
+      }
+      .progress {
+        margin-top: 10px;
+      }
+      .progress-track {
+        width: 100%;
+        height: 10px;
+        border-radius: 999px;
+        background: #e8eef6;
+        overflow: hidden;
+        border: 1px solid #d3dce9;
+      }
+      .progress-fill {
+        width: 0%;
+        height: 100%;
+        background: linear-gradient(90deg, #0a64be, #2e8be9);
+        transition: width 0.25s ease;
+      }
+      .progress-text {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .err {
+        color: var(--danger);
+      }
+      .mono {
+        font-family: Consolas, Menlo, monospace;
+      }
+
+      .compare-layout {
+        display: grid;
+        grid-template-columns: 1fr 1fr 300px;
+        gap: 12px;
+        align-items: start;
+      }
+      body.zoom-large .compare-layout {
+        grid-template-columns: 1fr 1fr 240px;
+      }
+      body.zoom-xlarge .compare-layout {
+        grid-template-columns: 1fr 1fr;
+      }
+      body.zoom-xlarge .diff-panel {
+        display: none;
+      }
+      .pane {
+        background: #f8fafc;
+        border: 1px solid #dce3ec;
+        border-radius: 12px;
+        height: calc(100vh - 220px);
+        overflow: auto;
+        padding: 10px;
+      }
+      .pane h3,
+      .diff-panel h3 {
+        margin: 0 0 8px;
+        font-size: 15px;
+      }
+      .page-card {
+        border: 1px solid #d5ddeb;
+        background: #fff;
+        border-radius: 10px;
+        margin-bottom: 10px;
+        padding: 8px;
+        transition: box-shadow 0.2s ease, border-color 0.2s ease;
+      }
+      .page-card.focused {
+        border-color: #1f6fcd;
+        box-shadow: 0 0 0 3px rgba(31, 111, 205, 0.2);
+      }
+      .page-head {
+        display: flex;
+        justify-content: space-between;
+        font-size: 12px;
+        margin-bottom: 6px;
+        color: #3f4d63;
+      }
+      .img-wrap {
+        position: relative;
+        border: 1px solid #e6ebf2;
+        background: #fafafa;
+        border-radius: 8px;
+        min-height: 220px;
+      }
+      .img-wrap img {
+        width: 100%;
+        display: block;
+        border-radius: 8px;
+      }
+      .img-wrap .mask {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        pointer-events: none;
+        mix-blend-mode: normal;
+        opacity: 0.72;
+      }
+      .placeholder {
+        min-height: 220px;
+        display: grid;
+        place-items: center;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .diff-panel {
+        background: #fff;
+        border: 1px solid #dce3ec;
+        border-radius: 12px;
+        height: calc(100vh - 220px);
+        overflow: auto;
+        padding: 10px;
+      }
+      .diff-list {
+        display: grid;
+        gap: 8px;
+      }
+      .diff-item {
+        width: 100%;
+        text-align: left;
+        border: 1px solid #d8e0eb;
+        background: #f7f9fc;
+        color: #1b2738;
+        border-radius: 8px;
+        padding: 8px;
+        font-size: 13px;
+      }
+      .diff-item:hover {
+        border-color: #86b3e6;
+        background: #eef5ff;
+      }
+      .empty-note {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      @media (max-width: 1200px) {
+        .compare-layout {
+          grid-template-columns: 1fr 1fr 240px;
+        }
+      }
+      @media (max-width: 980px) {
+        .compare-layout {
+          grid-template-columns: 1fr;
+        }
+        .pane,
+        .diff-panel {
+          height: 55vh;
+        }
+      }
+      @media (max-width: 900px) {
+        .top-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="card">
+        <h1>PDF Compare Viewer</h1>
+        <p>Draftable 風格雙欄同步捲動 + 差異清單（目前為影像層比對版）</p>
+
+        <div class="top-grid">
+          <div>
+            <label for="before">Before PDF</label>
+            <input id="before" type="file" accept="application/pdf" />
+          </div>
+          <div>
+            <label for="after">After PDF</label>
+            <input id="after" type="file" accept="application/pdf" />
+          </div>
+          <div>
+            <label for="mode">模式</label>
+            <select id="mode">
+              <option value="fast">fast（N 對 N）</option>
+              <option value="smart">smart（插頁/刪頁）</option>
+            </select>
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button id="submit">開始比對</button>
+          </div>
+        </div>
+
+        <div class="status" id="status">尚未開始</div>
+        <div class="progress">
+          <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+          <div id="progressText" class="progress-text">0%</div>
+        </div>
+        <div class="view-controls">
+          <label for="zoomRange">預覽大小</label>
+          <input id="zoomRange" type="range" min="100" max="140" step="10" value="100" />
+          <span id="zoomText" class="mono">標準</span>
+        </div>
+        <div class="status">任務 ID：<span id="job" class="mono">-</span></div>
+      </section>
+
+      <section class="compare-layout">
+        <section class="pane" id="beforePane">
+          <h3>Before</h3>
+          <div id="beforePages" class="pages"></div>
+        </section>
+
+        <section class="pane" id="afterPane">
+          <h3>After + Diff Mask（紅=左有右無，青=右有左無）</h3>
+          <div id="afterPages" class="pages"></div>
+        </section>
+
+        <aside class="diff-panel">
+          <h3>差異清單</h3>
+          <div id="summary" class="empty-note">尚未產生比對結果</div>
+          <div id="diffList" class="diff-list" style="margin-top: 8px"></div>
+        </aside>
+      </section>
+    </main>
+
+    <script>
+      const beforeInput = document.getElementById("before");
+      const afterInput = document.getElementById("after");
+      const modeInput = document.getElementById("mode");
+      const submitBtn = document.getElementById("submit");
+      const statusEl = document.getElementById("status");
+      const jobEl = document.getElementById("job");
+      const beforePagesEl = document.getElementById("beforePages");
+      const afterPagesEl = document.getElementById("afterPages");
+      const diffListEl = document.getElementById("diffList");
+      const summaryEl = document.getElementById("summary");
+      const progressFillEl = document.getElementById("progressFill");
+      const progressTextEl = document.getElementById("progressText");
+      const zoomRangeEl = document.getElementById("zoomRange");
+      const zoomTextEl = document.getElementById("zoomText");
+      const beforePane = document.getElementById("beforePane");
+      const afterPane = document.getElementById("afterPane");
+
+      let currentJobId = null;
+      let syncingScroll = false;
+      function scrollCardIntoPane(pane, card) {
+        if (!pane || !card) return;
+        const targetTop = card.offsetTop - pane.clientHeight * 0.18;
+        pane.scrollTo({ top: Math.max(0, targetTop), behavior: "auto" });
+      }
+
+      function flashCard(card) {
+        if (!card) return;
+        card.classList.add("focused");
+        setTimeout(() => card.classList.remove("focused"), 1400);
+      }
+
+      function applyPageScale(percent) {
+        const value = Number(percent);
+        beforePagesEl.style.zoom = "1";
+        afterPagesEl.style.zoom = "1";
+        document.body.classList.remove("zoom-large", "zoom-xlarge");
+
+        if (value >= 130) {
+          document.body.classList.add("zoom-xlarge");
+          zoomTextEl.textContent = "超大";
+          return;
+        }
+        if (value >= 110) {
+          document.body.classList.add("zoom-large");
+          zoomTextEl.textContent = "加大";
+          return;
+        }
+        zoomTextEl.textContent = "標準";
+      }
+
+      function setStatus(text, isError = false) {
+        statusEl.textContent = text;
+        statusEl.classList.toggle("err", isError);
+      }
+
+      function clearResultView() {
+        beforePagesEl.innerHTML = "";
+        afterPagesEl.innerHTML = "";
+        diffListEl.innerHTML = "";
+        summaryEl.textContent = "尚未產生比對結果";
+        updateProgress(0, 0, "等待開始");
+      }
+
+      function updateProgress(current, total, phase) {
+        let pct = 0;
+        if (total > 0) {
+          pct = Math.max(0, Math.min(100, Math.round((current / total) * 100)));
+        }
+        progressFillEl.style.width = `${pct}%`;
+        if (!phase) {
+          progressTextEl.textContent = `${pct}% (${current}/${total || 0})`;
+          return;
+        }
+        progressTextEl.textContent = `${phase} - ${pct}% (${current}/${total || 0})`;
+      }
+
+      async function uploadAndStart() {
+        const before = beforeInput.files?.[0];
+        const after = afterInput.files?.[0];
+        const mode = modeInput.value;
+
+        if (!before || !after) {
+          setStatus("請先選擇兩份 PDF", true);
+          return;
+        }
+
+        submitBtn.disabled = true;
+        clearResultView();
+        setStatus("上傳中...");
+        updateProgress(0, 100, "上傳中");
+
+        try {
+          const form = new FormData();
+          form.append("before", before);
+          form.append("after", after);
+          form.append("mode", mode);
+
+          const createRes = await fetch("/api/compare", { method: "POST", body: form });
+          if (!createRes.ok) {
+            throw new Error(await createRes.text());
+          }
+
+          const job = await createRes.json();
+          currentJobId = job.job_id;
+          jobEl.textContent = currentJobId;
+          setStatus("任務已建立，等待後端比對...");
+          updateProgress(0, 1, "排隊中");
+          await pollStatus(currentJobId);
+        } catch (err) {
+          setStatus(`錯誤：${err.message || err}`, true);
+        } finally {
+          submitBtn.disabled = false;
+        }
+      }
+
+      async function pollStatus(jobId) {
+        while (true) {
+          const res = await fetch(`/api/compare/${jobId}`);
+          if (!res.ok) throw new Error("查詢狀態失敗");
+          const data = await res.json();
+
+          const current = data.progress?.current ?? 0;
+          const total = data.progress?.total ?? 0;
+          setStatus(`狀態：${data.status}（${current}/${total}）`);
+          updateProgress(current, total || 1, data.status === "running" ? "比對中" : "排隊中");
+
+          if (data.status === "done") {
+            updateProgress(total || 1, total || 1, "載入結果中");
+            await loadAllPages(jobId, total || 0);
+            updateProgress(total || 1, total || 1, "完成");
+            return;
+          }
+          if (data.status === "failed") {
+            throw new Error(data.message || "比對失敗");
+          }
+          await new Promise((resolve) => setTimeout(resolve, 900));
+        }
+      }
+
+      async function loadAllPages(jobId, totalSlots) {
+        const pages = [];
+        for (let i = 1; i <= totalSlots; i += 1) {
+          const res = await fetch(`/api/compare/${jobId}/pages/${i}`);
+          if (!res.ok) continue;
+          pages.push(await res.json());
+          updateProgress(i, totalSlots || 1, "載入頁面");
+        }
+        renderPages(jobId, pages);
+      }
+
+      function createBeforePageCard(page) {
+        const card = document.createElement("article");
+        card.className = "page-card";
+        card.id = `before-slot-${page.page_no}`;
+
+        const head = document.createElement("div");
+        head.className = "page-head";
+        head.innerHTML = `<span>Slot ${page.page_no}</span><span>${page.mapping.state}</span>`;
+        card.appendChild(head);
+
+        const wrap = document.createElement("div");
+        wrap.className = "img-wrap";
+
+        if (page.assets.before_image) {
+          const img = document.createElement("img");
+          img.src = page.assets.before_image;
+          img.alt = `before slot ${page.page_no}`;
+          img.loading = "lazy";
+          img.decoding = "async";
+          wrap.appendChild(img);
+
+        } else {
+          const empty = document.createElement("div");
+          empty.className = "placeholder";
+          empty.textContent = "此頁為新增頁，Before 無對應頁面";
+          wrap.appendChild(empty);
+        }
+
+        card.appendChild(wrap);
+        return card;
+      }
+
+      function createAfterPageCard(page) {
+        const card = document.createElement("article");
+        card.className = "page-card";
+        card.id = `after-slot-${page.page_no}`;
+
+        const head = document.createElement("div");
+        head.className = "page-head";
+        head.innerHTML = `<span>Slot ${page.page_no}</span><span>diff: ${page.boxes?.length || 0}</span>`;
+        card.appendChild(head);
+
+        const wrap = document.createElement("div");
+        wrap.className = "img-wrap";
+
+        if (page.assets.after_image) {
+          const img = document.createElement("img");
+          img.src = page.assets.after_image;
+          img.alt = `after slot ${page.page_no}`;
+          img.loading = "lazy";
+          img.decoding = "async";
+          wrap.appendChild(img);
+
+          if (page.assets.mask_image) {
+            const mask = document.createElement("img");
+            mask.className = "mask";
+            mask.src = page.assets.mask_image;
+            mask.alt = `mask slot ${page.page_no}`;
+            mask.loading = "lazy";
+            mask.decoding = "async";
+            wrap.appendChild(mask);
+          }
+
+        } else {
+          const empty = document.createElement("div");
+          empty.className = "placeholder";
+          empty.textContent = "此頁為刪除頁，After 無對應頁面";
+          wrap.appendChild(empty);
+        }
+
+        card.appendChild(wrap);
+        return card;
+      }
+
+      function renderDiffList(pages) {
+        diffListEl.innerHTML = "";
+        const items = [];
+
+        function scoreLabel(score) {
+          if (score >= 0.75) return "相差極大";
+          if (score >= 0.45) return "相差大";
+          if (score >= 0.2) return "相差中等";
+          return "相差小";
+        }
+
+        for (const page of pages) {
+          const boxes = page.boxes || [];
+          for (let i = 0; i < boxes.length; i += 1) {
+            const box = boxes[i];
+            items.push({
+              id: `${page.page_no}-${i}`,
+              pageNo: page.page_no,
+              index: i + 1,
+              score: Number(box.score || 0),
+              label: scoreLabel(Number(box.score || 0)),
+            });
+          }
+        }
+
+        if (!items.length) {
+          summaryEl.textContent = "沒有偵測到差異框";
+          return;
+        }
+
+        summaryEl.textContent = `共 ${items.length} 個差異點，點擊可跳定位`;
+
+        for (const item of items) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "diff-item";
+          btn.textContent = `頁 ${item.pageNo} - 差異 ${item.index}（${item.label}）`;
+          btn.addEventListener("click", () => focusDiff(item.pageNo));
+          diffListEl.appendChild(btn);
+        }
+      }
+
+      function focusDiff(pageNo) {
+        const beforeCard = document.getElementById(`before-slot-${pageNo}`);
+        const afterCard = document.getElementById(`after-slot-${pageNo}`);
+        scrollCardIntoPane(beforePane, beforeCard);
+        scrollCardIntoPane(afterPane, afterCard);
+        flashCard(afterCard);
+        setStatus(`已跳至第 ${pageNo} 頁差異`);
+      }
+
+      function renderPages(jobId, pages) {
+        beforePagesEl.innerHTML = "";
+        afterPagesEl.innerHTML = "";
+
+        for (const page of pages) {
+          beforePagesEl.appendChild(createBeforePageCard(page));
+          afterPagesEl.appendChild(createAfterPageCard(page));
+        }
+
+        renderDiffList(pages);
+        setStatus(`比對完成：${pages.length} 頁可檢視`);
+      }
+
+      function bindScrollSync(a, b) {
+        a.addEventListener("scroll", () => {
+          if (syncingScroll) return;
+          syncingScroll = true;
+          b.scrollTop = a.scrollTop;
+          syncingScroll = false;
+        });
+      }
+
+      bindScrollSync(beforePane, afterPane);
+      bindScrollSync(afterPane, beforePane);
+
+      zoomRangeEl.addEventListener("input", () => {
+        applyPageScale(zoomRangeEl.value);
+      });
+
+      applyPageScale(zoomRangeEl.value);
+      submitBtn.addEventListener("click", uploadAndStart);
+    </script>
+  </body>
+</html>
