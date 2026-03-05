@@ -5,6 +5,7 @@ __pycache__/
 
 # Local runtime artifacts
 var/
+backend/.env
 backend/runlogs/
 backend/celerybeat-schedule*
 backend/tmp/

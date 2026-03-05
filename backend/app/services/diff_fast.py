@@ -22,8 +22,46 @@ def _resize_to_common(
     )
 
 
+def _align_after_to_before(
+    gray_before: np.ndarray, gray_after: np.ndarray
+) -> np.ndarray:
+    try:
+        shift, _response = cv2.phaseCorrelate(
+            gray_before.astype(np.float32), gray_after.astype(np.float32)
+        )
+        dx, dy = shift
+        matrix = np.array([[1.0, 0.0, dx], [0.0, 1.0, dy]], dtype=np.float32)
+        aligned = cv2.warpAffine(
+            gray_after,
+            matrix,
+            (gray_after.shape[1], gray_after.shape[0]),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REPLICATE,
+        )
+        return aligned
+    except Exception:
+        return gray_after
+
+
+def _build_direction_masks(
+    gray_before: np.ndarray, gray_after: np.ndarray, threshold: int
+) -> tuple[np.ndarray, np.ndarray]:
+    signed = gray_before.astype(np.int16) - gray_after.astype(np.int16)
+    # signed > 0: after 新增深色內容
+    after_added_raw = (signed > threshold).astype(np.uint8) * 255
+    # signed < 0: after 移除原內容
+    after_removed_raw = (signed < -threshold).astype(np.uint8) * 255
+    return after_added_raw, after_removed_raw
+
+
 def compare_images(
-    before_png: Path, after_png: Path, mask_out: Path, boxes_out: Path
+    before_png: Path,
+    after_png: Path,
+    mask_out: Path,
+    boxes_out: Path,
+    threshold: int = 25,
+    min_area: int = 40,
+    mask_alpha: int = 220,
 ) -> tuple[int, int, int]:
     img_a = cv2.imread(str(before_png), cv2.IMREAD_COLOR)
     img_b = cv2.imread(str(after_png), cv2.IMREAD_COLOR)
@@ -34,12 +72,10 @@ def compare_images(
     gray_a = cv2.GaussianBlur(_as_gray(img_a), (3, 3), 0)
     gray_b = cv2.GaussianBlur(_as_gray(img_b), (3, 3), 0)
 
-    threshold = 25
-    signed = gray_a.astype(np.int16) - gray_b.astype(np.int16)
-    # signed > 0 代表 before 較亮、after 較暗，通常是 after 新增深色內容
-    after_added_raw = (signed > threshold).astype(np.uint8) * 255
-    # signed < 0 代表 before 較暗、after 較亮，通常是 after 移除原內容
-    after_removed_raw = (signed < -threshold).astype(np.uint8) * 255
+    gray_b = _align_after_to_before(gray_a, gray_b)
+    after_added_raw, after_removed_raw = _build_direction_masks(
+        gray_a, gray_b, threshold
+    )
 
     kernel = np.ones((3, 3), np.uint8)
     after_added_clean = cv2.morphologyEx(after_added_raw, cv2.MORPH_OPEN, kernel)
@@ -56,7 +92,7 @@ def compare_images(
     boxes: list[dict] = []
     for i in range(1, num_labels):
         x, y, w, h, area = stats[i]
-        if int(area) < 40:
+        if int(area) < min_area:
             continue
 
         component = labels == i
@@ -86,10 +122,10 @@ def compare_images(
     overlap_pixels = after_added_pixels & after_removed_pixels
 
     # BGRA: 紅色 = 左有右無、青色 = 右有左無
-    rgba[after_removed_pixels] = (0, 0, 255, 220)
-    rgba[after_added_pixels] = (255, 255, 0, 220)
-    rgba[overlap_pixels] = (255, 255, 255, 220)
-    rgba[:, :, 3] = np.where(union > 0, 220, 0).astype(np.uint8)
+    rgba[after_removed_pixels] = (0, 0, 255, mask_alpha)
+    rgba[after_added_pixels] = (255, 255, 0, mask_alpha)
+    rgba[overlap_pixels] = (255, 255, 255, mask_alpha)
+    rgba[:, :, 3] = np.where(union > 0, mask_alpha, 0).astype(np.uint8)
 
     mask_out.parent.mkdir(parents=True, exist_ok=True)
     boxes_out.parent.mkdir(parents=True, exist_ok=True)

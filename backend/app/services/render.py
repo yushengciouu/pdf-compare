@@ -19,3 +19,13 @@ def render_pdf_pages(pdf_path: Path, output_dir: Path, dpi: int) -> int:
             out = output_dir / f"{index:04d}.png"
             pix.save(out)
         return doc.page_count
+
+
+def extract_page_texts(pdf_path: Path) -> list[str]:
+    texts: list[str] = []
+    with fitz.open(pdf_path) as doc:
+        for page in doc:
+            raw = page.get_text("text") or ""
+            compact = " ".join(raw.split())
+            texts.append(compact)
+    return texts

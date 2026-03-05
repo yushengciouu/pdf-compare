@@ -18,6 +18,9 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
+    task_soft_time_limit=settings.compare_task_soft_timeout_sec,
+    task_time_limit=settings.compare_task_hard_timeout_sec,
+    broker_connection_retry_on_startup=True,
     beat_schedule={
         "cleanup-expired-jobs-hourly": {
             "task": "app.workers.tasks.cleanup_expired_jobs_task",

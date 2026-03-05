@@ -55,3 +55,21 @@ python scripts/smoke_test.py --mode smart
 ```
 
 若輸出 `status=done`，代表核心流程正常。
+
+## 9. 重要 API 補充
+
+- `GET /api/compare/{job_id}/pages`：一次取回頁面清單（前端 lazy 顯示）
+- `POST /api/compare/{job_id}/cancel`：請求取消任務
+- `POST /api/compare/{job_id}/export`：背景排程產生匯出 PDF
+- `GET /api/compare/{job_id}/export`：查詢匯出狀態
+- `GET /api/compare/{job_id}/export/download`：下載匯出 PDF
+
+## 10. Docker Compose（可選）
+
+在專案根目錄執行：
+
+```bash
+docker compose up --build
+```
+
+會同時啟動 `api + worker + beat + redis`。

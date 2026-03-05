@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from json import JSONDecodeError
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from app.core.config import Settings
@@ -55,7 +56,7 @@ def new_job(settings: Settings, mode: str) -> tuple[str, Path, dict]:
     return job_id, job_root, meta
 
 
-def read_json(file_path: Path) -> dict:
+def read_json(file_path: Path) -> Any:
     if not file_path.exists():
         return {}
     attempts = 5
@@ -70,7 +71,7 @@ def read_json(file_path: Path) -> dict:
     return {}
 
 
-def write_json(file_path: Path, payload: dict) -> None:
+def write_json(file_path: Path, payload: Any) -> None:
     file_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = file_path.with_suffix(file_path.suffix + f".{os.getpid()}.tmp")
     with temp_path.open("w", encoding="utf-8") as f:

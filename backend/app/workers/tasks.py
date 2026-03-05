@@ -1,7 +1,8 @@
 from app.core.config import get_settings
 from app.services.diff_fast import compare_images
 from app.services.diff_smart import plan_smart_mapping
-from app.services.render import get_page_count, render_pdf_pages
+from app.services.export_result import build_result_pdf
+from app.services.render import extract_page_texts, get_page_count, render_pdf_pages
 from app.services.storage import cleanup_expired_jobs, load_meta, save_meta, write_json
 from app.workers.celery_app import celery_app
 
@@ -19,8 +20,14 @@ def run_compare_job(job_id: str, mode: str) -> None:
         except Exception:
             pass
 
+    def is_cancel_requested() -> bool:
+        latest = load_meta(settings, job_id)
+        return bool(latest.get("cancel_requested")) if latest else False
+
     meta = load_meta(settings, job_id)
+    meta["cancel_requested"] = False
     meta["status"] = "running"
+    meta["message"] = "比對中"
     safe_save()
 
     try:
@@ -35,6 +42,9 @@ def run_compare_job(job_id: str, mode: str) -> None:
         )
         render_pdf_pages(after_pdf, job_root / "render" / "after", settings.render_dpi)
 
+        before_texts = extract_page_texts(before_pdf)
+        after_texts = extract_page_texts(after_pdf)
+
         meta["stats"]["pages_before"] = pages_before
         meta["stats"]["pages_after"] = pages_after
 
@@ -45,6 +55,8 @@ def run_compare_job(job_id: str, mode: str) -> None:
                 after_render_dir=job_root / "render" / "after",
                 pages_before=pages_before,
                 pages_after=pages_after,
+                before_texts=before_texts,
+                after_texts=after_texts,
             )
         else:
             page_map = []
@@ -84,6 +96,12 @@ def run_compare_job(job_id: str, mode: str) -> None:
         safe_save()
 
         for index, slot in enumerate(page_map, start=1):
+            if is_cancel_requested():
+                meta["status"] = "failed"
+                meta["message"] = "任務已取消"
+                safe_save()
+                return
+
             state = slot["state"]
             if state == "paired":
                 paired_count += 1
@@ -94,7 +112,13 @@ def run_compare_job(job_id: str, mode: str) -> None:
                 mask_out = job_root / "diff" / "mask" / f"{index:04d}.png"
                 boxes_out = job_root / "diff" / "boxes" / f"{index:04d}.json"
                 box_count, width, height = compare_images(
-                    before_png, after_png, mask_out, boxes_out
+                    before_png,
+                    after_png,
+                    mask_out,
+                    boxes_out,
+                    threshold=settings.diff_threshold,
+                    min_area=settings.diff_min_area,
+                    mask_alpha=settings.mask_alpha,
                 )
                 total_boxes += box_count
                 slot["width"] = width
@@ -126,6 +150,35 @@ def run_compare_job(job_id: str, mode: str) -> None:
             write_json(job_root / "error.json", {"message": str(exc)})
         except Exception:
             pass
+        raise
+
+
+@celery_app.task(name="app.workers.tasks.run_export_job")
+def run_export_job(job_id: str) -> None:
+    settings = get_settings()
+    job_root = settings.jobs_root / job_id
+    meta = load_meta(settings, job_id)
+    if not meta:
+        return
+
+    export_meta = meta.get("export", {})
+    export_meta["status"] = "running"
+    export_meta["message"] = "匯出中"
+    meta["export"] = export_meta
+    save_meta(settings, job_id, meta)
+
+    try:
+        output_pdf = build_result_pdf(job_root)
+        export_meta["status"] = "done"
+        export_meta["message"] = "匯出完成"
+        export_meta["file"] = str(output_pdf.name)
+        meta["export"] = export_meta
+        save_meta(settings, job_id, meta)
+    except Exception as exc:
+        export_meta["status"] = "failed"
+        export_meta["message"] = str(exc)
+        meta["export"] = export_meta
+        save_meta(settings, job_id, meta)
         raise
 
 

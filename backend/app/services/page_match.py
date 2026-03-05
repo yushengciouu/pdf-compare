@@ -1,4 +1,5 @@
 from pathlib import Path
+from difflib import SequenceMatcher
 
 import cv2
 import numpy as np
@@ -16,6 +17,14 @@ def _extract_signature(image_path: Path, thumb_size: int) -> np.ndarray:
 def _similarity(a: np.ndarray, b: np.ndarray) -> float:
     mad = float(np.mean(np.abs(a - b)))
     return max(0.0, 1.0 - mad)
+
+
+def _text_similarity(a: str, b: str) -> float:
+    if not a and not b:
+        return 1.0
+    if not a or not b:
+        return 0.0
+    return float(SequenceMatcher(a=a.lower(), b=b.lower()).ratio())
 
 
 def _build_signatures(
@@ -75,6 +84,10 @@ def build_smart_page_map(
     gap_penalty: float,
     match_bias: float,
     min_similarity: float,
+    before_texts: list[str] | None = None,
+    after_texts: list[str] | None = None,
+    image_weight: float = 0.7,
+    text_weight: float = 0.3,
 ) -> list[dict]:
     if pages_before == 0 and pages_after == 0:
         return []
@@ -85,7 +98,17 @@ def build_smart_page_map(
     sims = np.zeros((pages_before, pages_after), dtype=np.float32)
     for i in range(pages_before):
         for j in range(pages_after):
-            sims[i, j] = _similarity(sig_before[i], sig_after[j])
+            image_sim = _similarity(sig_before[i], sig_after[j])
+            if before_texts is not None and after_texts is not None:
+                text_sim = _text_similarity(before_texts[i], after_texts[j])
+                sims[i, j] = float(
+                    max(
+                        0.0,
+                        min(1.0, image_weight * image_sim + text_weight * text_sim),
+                    )
+                )
+            else:
+                sims[i, j] = image_sim
 
     score = np.full((pages_before + 1, pages_after + 1), -1e9, dtype=np.float32)
     trace = np.full((pages_before + 1, pages_after + 1), -1, dtype=np.int8)

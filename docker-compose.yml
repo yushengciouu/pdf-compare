@@ -1,0 +1,51 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  api:
+    build:
+      context: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app
+      - ./var:/var
+    environment:
+      PDF_COMPARE_STORAGE_ROOT: /var/compare
+      PDF_COMPARE_CELERY_BROKER_URL: redis://redis:6379/0
+      PDF_COMPARE_CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      - redis
+
+  worker:
+    build:
+      context: ./backend
+    command: celery -A app.workers.celery_app.celery_app worker --loglevel=info
+    volumes:
+      - ./backend/app:/app/app
+      - ./var:/var
+    environment:
+      PDF_COMPARE_STORAGE_ROOT: /var/compare
+      PDF_COMPARE_CELERY_BROKER_URL: redis://redis:6379/0
+      PDF_COMPARE_CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      - redis
+
+  beat:
+    build:
+      context: ./backend
+    command: celery -A app.workers.celery_app.celery_app beat --loglevel=info
+    volumes:
+      - ./backend/app:/app/app
+      - ./var:/var
+    environment:
+      PDF_COMPARE_STORAGE_ROOT: /var/compare
+      PDF_COMPARE_CELERY_BROKER_URL: redis://redis:6379/0
+      PDF_COMPARE_CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      - redis

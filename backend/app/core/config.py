@@ -22,10 +22,18 @@ class Settings(BaseSettings):
     celery_result_backend: str = "redis://localhost:6379/1"
 
     render_dpi: int = 240
+    diff_threshold: int = 25
+    diff_min_area: int = 40
+    mask_alpha: int = 220
     smart_thumb_size: int = 32
     smart_gap_penalty: float = 0.35
     smart_match_bias: float = 0.25
     smart_min_similarity: float = 0.45
+    smart_text_weight: float = 0.3
+    smart_image_weight: float = 0.7
+
+    compare_task_soft_timeout_sec: int = 1200
+    compare_task_hard_timeout_sec: int = 1500
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="PDF_COMPARE_")
 

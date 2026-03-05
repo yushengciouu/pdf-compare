@@ -65,6 +65,20 @@
         width: auto;
         min-width: 150px;
       }
+      .view-controls .mini-range {
+        width: 120px;
+      }
+      .view-controls .toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+      }
+      .view-controls .toggle input {
+        width: 16px;
+        min-height: 16px;
+        margin: 0;
+      }
       .view-controls .small-select {
         width: 130px;
         min-height: 34px;
@@ -300,6 +314,13 @@
           <label for="zoomRange">預覽大小</label>
           <input id="zoomRange" type="range" min="100" max="140" step="10" value="100" />
           <span id="zoomText" class="mono">標準</span>
+          <label for="maskOpacity" class="mono">遮罩</label>
+          <input id="maskOpacity" class="mini-range" type="range" min="25" max="85" step="5" value="56" />
+          <span id="maskOpacityText" class="mono">56%</span>
+          <label class="toggle" for="onlyDiffPages">
+            <input id="onlyDiffPages" type="checkbox" />
+            只看有差異頁
+          </label>
           <button id="exportBtn" type="button" class="btn-secondary" disabled>匯出結果 PDF</button>
         </div>
         <div class="status">任務 ID：<span id="job" class="mono">-</span></div>
@@ -339,12 +360,25 @@
       const progressTextEl = document.getElementById("progressText");
       const zoomRangeEl = document.getElementById("zoomRange");
       const zoomTextEl = document.getElementById("zoomText");
+      const maskOpacityEl = document.getElementById("maskOpacity");
+      const maskOpacityTextEl = document.getElementById("maskOpacityText");
+      const onlyDiffPagesEl = document.getElementById("onlyDiffPages");
       const exportBtn = document.getElementById("exportBtn");
       const beforePane = document.getElementById("beforePane");
       const afterPane = document.getElementById("afterPane");
 
       let currentJobId = null;
       let syncingScroll = false;
+      let cachedPages = [];
+
+      function applyMaskOpacity(value) {
+        const v = Number(value);
+        const opacity = Math.max(0.1, Math.min(0.95, v / 100));
+        document.querySelectorAll(".img-wrap .mask").forEach((el) => {
+          el.style.opacity = String(opacity);
+        });
+        maskOpacityTextEl.textContent = `${v}%`;
+      }
       function scrollCardIntoPane(pane, card) {
         if (!pane || !card) return;
         const targetTop = card.offsetTop - pane.clientHeight * 0.18;
@@ -385,6 +419,7 @@
         beforePagesEl.innerHTML = "";
         afterPagesEl.innerHTML = "";
         diffListEl.innerHTML = "";
+        cachedPages = [];
         summaryEl.textContent = "尚未產生比對結果";
         exportBtn.disabled = true;
         updateProgress(0, 0, "等待開始");
@@ -467,14 +502,15 @@
         }
       }
 
-      async function loadAllPages(jobId, totalSlots) {
-        const pages = [];
-        for (let i = 1; i <= totalSlots; i += 1) {
-          const res = await fetch(`/api/compare/${jobId}/pages/${i}`);
-          if (!res.ok) continue;
-          pages.push(await res.json());
-          updateProgress(i, totalSlots || 1, "載入頁面");
+      async function loadAllPages(jobId, _totalSlots) {
+        const res = await fetch(`/api/compare/${jobId}/pages`);
+        if (!res.ok) {
+          throw new Error("載入頁面清單失敗");
         }
+        const data = await res.json();
+        const pages = data.pages || [];
+        updateProgress(1, 1, "載入頁面");
+        cachedPages = pages;
         renderPages(jobId, pages);
       }
 
@@ -538,6 +574,7 @@
             mask.alt = `mask slot ${page.page_no}`;
             mask.loading = "lazy";
             mask.decoding = "async";
+            mask.style.opacity = String(Math.max(0.1, Number(maskOpacityEl.value) / 100));
             wrap.appendChild(mask);
           }
 
@@ -609,13 +646,17 @@
         beforePagesEl.innerHTML = "";
         afterPagesEl.innerHTML = "";
 
-        for (const page of pages) {
+        const onlyDiff = !!onlyDiffPagesEl.checked;
+        const viewPages = onlyDiff ? pages.filter((p) => (p.boxes || []).length > 0) : pages;
+
+        for (const page of viewPages) {
           beforePagesEl.appendChild(createBeforePageCard(page));
           afterPagesEl.appendChild(createAfterPageCard(page));
         }
 
         renderDiffList(pages);
-        setStatus(`比對完成：${pages.length} 頁可檢視`);
+        applyMaskOpacity(maskOpacityEl.value);
+        setStatus(`比對完成：顯示 ${viewPages.length} / ${pages.length} 頁`);
       }
 
       function bindScrollSync(a, b) {
@@ -634,11 +675,41 @@
         applyPageScale(zoomRangeEl.value);
       });
 
+      maskOpacityEl.addEventListener("input", () => applyMaskOpacity(maskOpacityEl.value));
+      onlyDiffPagesEl.addEventListener("change", () => {
+        if (cachedPages.length) {
+          renderPages(currentJobId, cachedPages);
+        }
+      });
+
       applyPageScale(zoomRangeEl.value);
       submitBtn.addEventListener("click", uploadAndStart);
-      exportBtn.addEventListener("click", () => {
+      exportBtn.addEventListener("click", async () => {
         if (!currentJobId) return;
-        window.open(`/api/compare/${currentJobId}/export`, "_blank");
+        exportBtn.disabled = true;
+        try {
+          await fetch(`/api/compare/${currentJobId}/export`, { method: "POST" });
+          setStatus("正在準備匯出檔...");
+
+          while (true) {
+            const res = await fetch(`/api/compare/${currentJobId}/export`);
+            if (!res.ok) throw new Error("查詢匯出狀態失敗");
+            const data = await res.json();
+            if (data.status === "done" && data.download_url) {
+              window.open(data.download_url, "_blank");
+              setStatus("匯出完成，已開始下載");
+              break;
+            }
+            if (data.status === "failed") {
+              throw new Error(data.message || "匯出失敗");
+            }
+            await new Promise((resolve) => setTimeout(resolve, 900));
+          }
+        } catch (err) {
+          setStatus(`匯出失敗：${err.message || err}`, true);
+        } finally {
+          exportBtn.disabled = false;
+        }
       });
     </script>
   </body>
