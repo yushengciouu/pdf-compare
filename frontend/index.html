@@ -378,6 +378,7 @@
       let syncingScroll = false;
       let cachedPages = [];
       let markMode = "all";
+      let syncHeightTimer = null;
 
       function applyMarkMode(mode) {
         markMode = mode || markMode;
@@ -401,6 +402,39 @@
         if (!pane || !card) return;
         const targetTop = card.offsetTop - pane.clientHeight * 0.18;
         pane.scrollTo({ top: Math.max(0, targetTop), behavior: "auto" });
+      }
+
+      function scheduleSyncSlotHeights() {
+        if (syncHeightTimer) {
+          clearTimeout(syncHeightTimer);
+        }
+        syncHeightTimer = setTimeout(syncSlotHeights, 40);
+      }
+
+      function syncSlotHeights() {
+        const beforeCards = beforePagesEl.querySelectorAll(".page-card");
+        beforeCards.forEach((beforeCard) => {
+          const id = beforeCard.id || "";
+          const slot = id.replace("before-slot-", "");
+          const afterCard = document.getElementById(`after-slot-${slot}`);
+          if (!afterCard) return;
+
+          beforeCard.style.minHeight = "";
+          afterCard.style.minHeight = "";
+          const maxH = Math.max(beforeCard.offsetHeight, afterCard.offsetHeight);
+          beforeCard.style.minHeight = `${maxH}px`;
+          afterCard.style.minHeight = `${maxH}px`;
+        });
+      }
+
+      function bindImageLoadHeightSync() {
+        const images = document.querySelectorAll("#beforePages img, #afterPages img");
+        images.forEach((img) => {
+          if (!img.complete) {
+            img.addEventListener("load", scheduleSyncSlotHeights, { once: true });
+            img.addEventListener("error", scheduleSyncSlotHeights, { once: true });
+          }
+        });
       }
 
       function flashCard(card) {
@@ -675,6 +709,8 @@
 
         renderDiffList(pages);
         applyMaskOpacity(maskOpacityEl.value);
+        bindImageLoadHeightSync();
+        scheduleSyncSlotHeights();
         setStatus(`比對完成：顯示 ${viewPages.length} / ${pages.length} 頁`);
       }
 
