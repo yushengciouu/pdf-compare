@@ -14,8 +14,10 @@ services:
       - "8000:8000"
     volumes:
       - ./backend/app:/app/app
+      - ./frontend:/frontend
       - ./var:/var
     environment:
+      PDF_COMPARE_FRONTEND_DIR: /frontend
       PDF_COMPARE_STORAGE_ROOT: /var/compare
       PDF_COMPARE_CELERY_BROKER_URL: redis://redis:6379/0
       PDF_COMPARE_CELERY_RESULT_BACKEND: redis://redis:6379/1

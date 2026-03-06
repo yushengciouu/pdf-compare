@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     storage_root: Path = Path(
         r"C:\Users\felix_chiu\Desktop\project\pdf-compare\var\compare"
     )
+    frontend_dir: Path | None = None
     jobs_dir_name: str = "jobs"
     max_pdf_mb: int = 50
     max_pages: int = 200
