@@ -452,14 +452,20 @@
         if (value >= 130) {
           document.body.classList.add("zoom-xlarge");
           zoomTextEl.textContent = "超大";
+          scheduleSyncSlotHeights();
+          setTimeout(scheduleSyncSlotHeights, 120);
           return;
         }
         if (value >= 110) {
           document.body.classList.add("zoom-large");
           zoomTextEl.textContent = "加大";
+          scheduleSyncSlotHeights();
+          setTimeout(scheduleSyncSlotHeights, 120);
           return;
         }
         zoomTextEl.textContent = "標準";
+        scheduleSyncSlotHeights();
+        setTimeout(scheduleSyncSlotHeights, 120);
       }
 
       function setStatus(text, isError = false) {
@@ -740,6 +746,12 @@
       onlyDiffPagesEl.addEventListener("change", () => {
         if (cachedPages.length) {
           renderPages(currentJobId, cachedPages);
+        }
+      });
+
+      window.addEventListener("resize", () => {
+        if (cachedPages.length) {
+          scheduleSyncSlotHeights();
         }
       });
 
