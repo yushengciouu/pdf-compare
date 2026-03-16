@@ -194,6 +194,29 @@
         margin-bottom: 6px;
         color: #3f4d63;
       }
+      .state-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 700;
+        border: 1px solid transparent;
+      }
+      .state-badge.paired {
+        background: #eef5ff;
+        color: #24548a;
+        border-color: #c8dbf5;
+      }
+      .state-badge.inserted {
+        background: #eaf8f4;
+        color: #0f6a50;
+        border-color: #bfe9dd;
+      }
+      .state-badge.deleted {
+        background: #fdeeee;
+        color: #a22727;
+        border-color: #f7caca;
+      }
       .img-wrap {
         position: relative;
         border: 1px solid #e6ebf2;
@@ -215,6 +238,19 @@
         pointer-events: none;
         mix-blend-mode: multiply;
         opacity: 0.56;
+      }
+      .img-wrap .state-mask {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        border-radius: 8px;
+        z-index: 4;
+      }
+      .img-wrap .state-mask.inserted {
+        background: rgba(44, 173, 143, 0.32);
+      }
+      .img-wrap .state-mask.deleted {
+        background: rgba(215, 73, 73, 0.34);
       }
       .placeholder {
         min-height: 220px;
@@ -281,7 +317,7 @@
     <main>
       <section class="card">
         <h1>PDF Compare Viewer</h1>
-        <p>Draftable 風格雙欄同步捲動 + 差異清單（目前為影像層比對版）</p>
+        <!-- <p> 差異清單（目前為影像層比對版）</p> -->
 
         <div class="top-grid">
           <div>
@@ -388,6 +424,26 @@
         if (markMode === "removed") return page.assets.mask_removed_image || null;
         if (markMode === "added") return page.assets.mask_added_image || null;
         return page.assets.mask_image || null;
+      }
+
+      function stateLabel(state) {
+        if (state === "inserted") return "新增頁";
+        if (state === "deleted") return "刪除頁";
+        return "配對頁";
+      }
+
+      function createStateBadge(state) {
+        const badge = document.createElement("span");
+        badge.className = `state-badge ${state}`;
+        badge.textContent = stateLabel(state);
+        return badge;
+      }
+
+      function appendStateMask(wrap, state) {
+        if (state !== "inserted" && state !== "deleted") return;
+        const marker = document.createElement("div");
+        marker.className = `state-mask ${state}`;
+        wrap.appendChild(marker);
       }
 
       function applyMaskOpacity(value) {
@@ -579,7 +635,10 @@
 
         const head = document.createElement("div");
         head.className = "page-head";
-        head.innerHTML = `<span>Slot ${page.page_no}</span><span>${page.mapping.state}</span>`;
+        const left = document.createElement("span");
+        left.textContent = `Slot ${page.page_no}`;
+        head.appendChild(left);
+        head.appendChild(createStateBadge(page.mapping.state));
         card.appendChild(head);
 
         const wrap = document.createElement("div");
@@ -592,6 +651,9 @@
           img.loading = "lazy";
           img.decoding = "async";
           wrap.appendChild(img);
+          if (page.mapping.state === "deleted") {
+            appendStateMask(wrap, "deleted");
+          }
 
         } else {
           const empty = document.createElement("div");
@@ -611,7 +673,18 @@
 
         const head = document.createElement("div");
         head.className = "page-head";
-        head.innerHTML = `<span>Slot ${page.page_no}</span><span>diff: ${page.boxes?.length || 0}</span>`;
+        const left = document.createElement("span");
+        left.textContent = `Slot ${page.page_no}`;
+        const state = page.mapping?.state;
+        const right =
+          state === "inserted" || state === "deleted"
+            ? createStateBadge(state)
+            : document.createElement("span");
+        if (state !== "inserted" && state !== "deleted") {
+          right.textContent = `diff: ${page.boxes?.length || 0}`;
+        }
+        head.appendChild(left);
+        head.appendChild(right);
         card.appendChild(head);
 
         const wrap = document.createElement("div");
@@ -635,6 +708,9 @@
             mask.decoding = "async";
             mask.style.opacity = String(Math.max(0.1, Number(maskOpacityEl.value) / 100));
             wrap.appendChild(mask);
+          }
+          if (page.mapping.state === "inserted") {
+            appendStateMask(wrap, "inserted");
           }
 
         } else {
@@ -661,7 +737,26 @@
 
         for (const page of pages) {
           const boxes = page.boxes || [];
-          if (!boxes.length) continue;
+          const state = page.mapping?.state;
+          if (!boxes.length && state === "paired") continue;
+
+          if (state === "inserted") {
+            pageItems.push({
+              pageNo: page.page_no,
+              diffCount: 0,
+              label: "新增頁",
+            });
+            continue;
+          }
+
+          if (state === "deleted") {
+            pageItems.push({
+              pageNo: page.page_no,
+              diffCount: 0,
+              label: "刪除頁",
+            });
+            continue;
+          }
 
           let maxScore = 0;
           for (let i = 0; i < boxes.length; i += 1) {
@@ -686,7 +781,11 @@
           const btn = document.createElement("button");
           btn.type = "button";
           btn.className = "diff-item";
-          btn.textContent = `第 ${item.pageNo} 頁（${item.diffCount} 處，${item.label}）`;
+          if (item.diffCount > 0) {
+            btn.textContent = `第 ${item.pageNo} 頁（${item.diffCount} 處，${item.label}）`;
+          } else {
+            btn.textContent = `第 ${item.pageNo} 頁（${item.label}）`;
+          }
           btn.addEventListener("click", () => focusDiff(item.pageNo));
           diffListEl.appendChild(btn);
         }
