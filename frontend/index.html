@@ -486,7 +486,10 @@
       }
       function scrollCardIntoPane(pane, card) {
         if (!pane || !card) return;
-        const targetTop = card.offsetTop - pane.clientHeight * 0.18;
+        const paneRect = pane.getBoundingClientRect();
+        const cardRect = card.getBoundingClientRect();
+        const deltaTop = cardRect.top - paneRect.top;
+        const targetTop = pane.scrollTop + deltaTop - 8;
         pane.scrollTo({ top: Math.max(0, targetTop), behavior: "auto" });
       }
 
