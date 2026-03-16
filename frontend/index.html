@@ -383,6 +383,10 @@
             <input id="onlyDiffPages" type="checkbox" />
             只看有差異頁
           </label>
+          <label class="toggle" for="hideSmallDiff">
+            <input id="hideSmallDiff" type="checkbox" />
+            隱藏相差小
+          </label>
           <button id="exportBtn" type="button" class="btn-secondary" disabled>匯出結果 PDF</button>
         </div>
         <div class="status">任務 ID：<span id="job" class="mono">-</span></div>
@@ -429,6 +433,7 @@
       const maskOpacityTextEl = document.getElementById("maskOpacityText");
       const markModeEl = document.getElementById("markMode");
       const onlyDiffPagesEl = document.getElementById("onlyDiffPages");
+      const hideSmallDiffEl = document.getElementById("hideSmallDiff");
       const exportBtn = document.getElementById("exportBtn");
       const prefilterSummaryEl = document.getElementById("prefilterSummary");
       const prefilterListEl = document.getElementById("prefilterList");
@@ -754,13 +759,7 @@
         const left = document.createElement("span");
         left.textContent = `Slot ${page.page_no}`;
         const state = page.mapping?.state;
-        const right =
-          state === "inserted" || state === "deleted"
-            ? createStateBadge(state)
-            : document.createElement("span");
-        if (state !== "inserted" && state !== "deleted") {
-          right.textContent = `diff: ${page.boxes?.length || 0}`;
-        }
+        const right = createStateBadge(state || "paired");
         head.appendChild(left);
         head.appendChild(right);
         card.appendChild(head);
@@ -804,69 +803,77 @@
 
       function renderDiffList(pages) {
         diffListEl.innerHTML = "";
-        const pageItems = [];
+        const pageItems = buildPageItems(pages);
+        const hideSmall = !!hideSmallDiffEl.checked;
+        const visibleItems = hideSmall
+          ? pageItems.filter((item) => item.label !== "相差小")
+          : pageItems;
 
-        function scoreLabel(score) {
-          if (score >= 0.75) return "相差極大";
-          if (score >= 0.45) return "相差大";
-          if (score >= 0.2) return "相差中等";
-          return "相差小";
+        if (!visibleItems.length) {
+          summaryEl.textContent = "沒有偵測到差異框";
+          return;
         }
 
+        summaryEl.textContent = `共 ${visibleItems.length} 頁有差異，點擊可跳頁`;
+
+        for (const item of visibleItems) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "diff-item";
+          btn.textContent = `第 ${item.pageNo} 頁（${item.label}）`;
+          btn.addEventListener("click", () => focusDiff(item.pageNo));
+          diffListEl.appendChild(btn);
+        }
+      }
+
+      function scoreLabel(score) {
+        if (score >= 0.72) return "相差極大";
+        if (score >= 0.5) return "相差大";
+        if (score >= 0.2) return "相差中等";
+        return "相差小";
+      }
+
+      function buildPageItems(pages) {
+        const pageItems = [];
         for (const page of pages) {
           const boxes = page.boxes || [];
           const state = page.mapping?.state;
           if (!boxes.length && state === "paired") continue;
 
           if (state === "inserted") {
-            pageItems.push({
-              pageNo: page.page_no,
-              diffCount: 0,
-              label: "新增頁",
-            });
+            pageItems.push({ pageNo: page.page_no, diffCount: 0, label: "新增頁" });
             continue;
           }
 
           if (state === "deleted") {
-            pageItems.push({
-              pageNo: page.page_no,
-              diffCount: 0,
-              label: "刪除頁",
-            });
+            pageItems.push({ pageNo: page.page_no, diffCount: 0, label: "刪除頁" });
             continue;
           }
 
           let maxScore = 0;
+          let totalArea = 0;
           for (let i = 0; i < boxes.length; i += 1) {
             maxScore = Math.max(maxScore, Number(boxes[i].score || 0));
+            totalArea += Number((boxes[i].w || 0) * (boxes[i].h || 0));
           }
+
+          const pageWidth = Number(page.width || 0);
+          const pageHeight = Number(page.height || 0);
+          const pageArea = pageWidth > 0 && pageHeight > 0 ? pageWidth * pageHeight : 0;
+          const areaRatio = pageArea > 0 ? totalArea / pageArea : 0;
+
+          const maxScoreNorm = Math.max(0, Math.min(1, maxScore));
+          const areaScoreNorm = Math.max(0, Math.min(1, Math.sqrt(areaRatio) * 8));
+          const countScoreNorm = Math.max(0, Math.min(1, boxes.length / 120));
+          const pageSeverity = maxScoreNorm * 0.5 + areaScoreNorm * 0.35 + countScoreNorm * 0.15;
 
           pageItems.push({
             pageNo: page.page_no,
             diffCount: boxes.length,
-            label: scoreLabel(maxScore),
+            label: scoreLabel(pageSeverity),
           });
         }
-
-        if (!pageItems.length) {
-          summaryEl.textContent = "沒有偵測到差異框";
-          return;
-        }
-
-        summaryEl.textContent = `共 ${pageItems.length} 頁有差異，點擊可跳頁`;
-
-        for (const item of pageItems) {
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.className = "diff-item";
-          if (item.diffCount > 0) {
-            btn.textContent = `第 ${item.pageNo} 頁（${item.diffCount} 處，${item.label}）`;
-          } else {
-            btn.textContent = `第 ${item.pageNo} 頁（${item.label}）`;
-          }
-          btn.addEventListener("click", () => focusDiff(item.pageNo));
-          diffListEl.appendChild(btn);
-        }
+        return pageItems;
       }
 
       function focusDiff(pageNo) {
@@ -882,8 +889,18 @@
         beforePagesEl.innerHTML = "";
         afterPagesEl.innerHTML = "";
 
+        const pageItems = buildPageItems(pages);
+        const itemMap = new Map(pageItems.map((x) => [x.pageNo, x]));
         const onlyDiff = !!onlyDiffPagesEl.checked;
-        const viewPages = onlyDiff ? pages.filter((p) => (p.boxes || []).length > 0) : pages;
+        const hideSmall = !!hideSmallDiffEl.checked;
+        let viewPages = onlyDiff ? pages.filter((p) => itemMap.has(p.page_no)) : pages;
+        if (hideSmall) {
+          viewPages = viewPages.filter((p) => {
+            const item = itemMap.get(p.page_no);
+            if (!item) return true;
+            return item.label !== "相差小";
+          });
+        }
 
         for (const page of viewPages) {
           beforePagesEl.appendChild(createBeforePageCard(page));
@@ -921,6 +938,11 @@
         }
       });
       onlyDiffPagesEl.addEventListener("change", () => {
+        if (cachedPages.length) {
+          renderPages(currentJobId, cachedPages);
+        }
+      });
+      hideSmallDiffEl.addEventListener("change", () => {
         if (cachedPages.length) {
           renderPages(currentJobId, cachedPages);
         }

@@ -116,18 +116,23 @@ def compare_images(
             }
         )
 
+    vis_kernel = np.ones((3, 3), np.uint8)
+    after_added_vis = cv2.dilate(after_added_clean, vis_kernel, iterations=1)
+    after_removed_vis = cv2.dilate(after_removed_clean, vis_kernel, iterations=1)
+    union_vis = cv2.bitwise_or(after_added_vis, after_removed_vis)
+
     rgba = np.zeros((union.shape[0], union.shape[1], 4), dtype=np.uint8)
     rgba_removed = np.zeros((union.shape[0], union.shape[1], 4), dtype=np.uint8)
     rgba_added = np.zeros((union.shape[0], union.shape[1], 4), dtype=np.uint8)
-    after_added_pixels = after_added_clean > 0
-    after_removed_pixels = after_removed_clean > 0
+    after_added_pixels = after_added_vis > 0
+    after_removed_pixels = after_removed_vis > 0
     overlap_pixels = after_added_pixels & after_removed_pixels
 
     # BGRA: 紅色 = 左有右無、青色 = 右有左無
     rgba[after_removed_pixels] = (0, 0, 255, mask_alpha)
     rgba[after_added_pixels] = (255, 255, 0, mask_alpha)
     rgba[overlap_pixels] = (255, 255, 255, mask_alpha)
-    rgba[:, :, 3] = np.where(union > 0, mask_alpha, 0).astype(np.uint8)
+    rgba[:, :, 3] = np.where(union_vis > 0, mask_alpha, 0).astype(np.uint8)
 
     rgba_removed[after_removed_pixels] = (0, 0, 255, mask_alpha)
     rgba_removed[:, :, 3] = np.where(after_removed_pixels, mask_alpha, 0).astype(
