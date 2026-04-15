@@ -3,6 +3,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+ImportanceLevel = Literal["low", "medium", "high"]
+ChangeType = Literal["added", "removed", "modified"]
+
 
 CompareMode = Literal["fast", "smart"]
 JobStatus = Literal["queued", "running", "done", "failed"]
@@ -70,3 +73,43 @@ class ComparePageResponse(BaseModel):
     boxes: list[DiffBox] = Field(default_factory=list)
     width: int | None = None
     height: int | None = None
+
+
+# ---------------------------------------------------------------------------
+# LLM 分析相關 schemas
+# ---------------------------------------------------------------------------
+
+ImportanceLevel = Literal["low", "medium", "high"]
+ChangeType = Literal["added", "removed", "modified"]
+
+
+class PageChange(BaseModel):
+    type: ChangeType
+    description: str
+
+
+class PageAnalysisResult(BaseModel):
+    slot: int
+    state: PageState
+    before_page: int | None = None
+    after_page: int | None = None
+    image_diff: float = 0.0
+    text_diff: float = 0.0
+    reason: str = ""
+    importance: ImportanceLevel = "medium"
+    summary: str = ""
+    changes: list[PageChange] = Field(default_factory=list)
+
+
+class AnalyzeSummary(BaseModel):
+    pages_before: int
+    pages_after: int
+    total_slots: int
+    candidate_pages: int
+
+
+class AnalyzeResponse(BaseModel):
+    summary: AnalyzeSummary
+    thresholds: dict
+    overall_summary: str = ""
+    pages: list[PageAnalysisResult] = Field(default_factory=list)

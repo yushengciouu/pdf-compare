@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 
 from app.core.config import Settings, get_settings
 from app.models.schemas import (
+    AnalyzeResponse,
     CompareCreateResponse,
     CompareMode,
     ComparePageResponse,
@@ -23,6 +24,7 @@ from app.services.storage import (
     save_meta,
 )
 from app.services.prefilter import Thresholds, build_prefilter_report
+from app.services.llm_analyze import build_analyze_report
 from app.workers.tasks import run_compare_job, run_export_job
 
 router = APIRouter(prefix="/compare", tags=["compare"])
@@ -100,6 +102,54 @@ async def run_prefilter(
             neighbor_window=max(0, min(5, int(neighbor_window))),
         )
         return build_prefilter_report(before_path, after_path, settings, thresholds)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+@router.post("/analyze", response_model=AnalyzeResponse)
+async def run_llm_analyze(
+    before: Annotated[UploadFile, File(...)],
+    after: Annotated[UploadFile, File(...)],
+    image_threshold: Annotated[float, Form()] = 0.03,
+    text_threshold: Annotated[float, Form()] = 0.08,
+    min_candidates: Annotated[int, Form()] = 6,
+    neighbor_window: Annotated[int, Form()] = 1,
+    settings: Settings = Depends(get_settings),
+) -> AnalyzeResponse:
+    """
+    LLM 全自動分析端點。
+
+    流程：
+    1. 接收兩份 PDF
+    2. 執行 prefilter，找出差異候選頁
+    3. 對每個候選頁附上 before/after 截圖 + 文字 diff
+    4. 一次送入 vLLM（Gemma4）進行分析
+    5. 回傳結構化 JSON，每頁含：importance / summary / changes
+
+    注意：此端點會直接呼叫 LLM，需要 LLM 服務可用，且耗時較長。
+    """
+    _validate_pdf(before)
+    _validate_pdf(after)
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="pdf-llm-analyze-upload-"))
+    try:
+        max_bytes = settings.max_pdf_mb * 1024 * 1024
+        before_path = temp_dir / "before.pdf"
+        after_path = temp_dir / "after.pdf"
+        await _save_upload(before, before_path, max_bytes)
+        await _save_upload(after, after_path, max_bytes)
+
+        thresholds = Thresholds(
+            image=max(0.0, min(1.0, image_threshold)),
+            text=max(0.0, min(1.0, text_threshold)),
+            min_candidates=max(1, min(1000, int(min_candidates))),
+            neighbor_window=max(0, min(5, int(neighbor_window))),
+        )
+
+        result = build_analyze_report(before_path, after_path, settings, thresholds)
+        return AnalyzeResponse.model_validate(result)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 

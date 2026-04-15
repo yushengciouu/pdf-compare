@@ -311,6 +311,97 @@
         background: #f9fbfd;
       }
 
+      /* LLM 分析結果 */
+      .btn-analyze {
+        background: #5a2d91;
+      }
+      .analyze-overall {
+        background: #f3f0fa;
+        border: 1px solid #ccc0e8;
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-size: 14px;
+        color: #2e1a55;
+        margin-bottom: 10px;
+        line-height: 1.6;
+      }
+      .analyze-list {
+        display: grid;
+        gap: 8px;
+        margin-top: 6px;
+      }
+      .analyze-item {
+        border: 1px solid #d5ccea;
+        border-radius: 10px;
+        padding: 10px 12px;
+        background: #fdfcff;
+        font-size: 13px;
+      }
+      .analyze-item-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 6px;
+        font-weight: 600;
+        color: #2c1f4a;
+      }
+      .importance-badge {
+        display: inline-block;
+        padding: 2px 9px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 700;
+        border: 1px solid transparent;
+      }
+      .importance-badge.high {
+        background: #fef2f2;
+        color: #991b1b;
+        border-color: #fca5a5;
+      }
+      .importance-badge.medium {
+        background: #fffbeb;
+        color: #92400e;
+        border-color: #fcd34d;
+      }
+      .importance-badge.low {
+        background: #f0fdf4;
+        color: #166534;
+        border-color: #86efac;
+      }
+      .analyze-summary-text {
+        color: #3d3355;
+        margin-bottom: 6px;
+        line-height: 1.5;
+      }
+      .analyze-changes {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        gap: 3px;
+      }
+      .analyze-changes li {
+        font-size: 12px;
+        padding: 3px 8px;
+        border-radius: 6px;
+        line-height: 1.5;
+      }
+      .analyze-changes li.added {
+        background: #edfaf5;
+        color: #0c5c40;
+        border-left: 3px solid #34d399;
+      }
+      .analyze-changes li.removed {
+        background: #fef2f2;
+        color: #7f1d1d;
+        border-left: 3px solid #f87171;
+      }
+      .analyze-changes li.modified {
+        background: #fffbeb;
+        color: #78350f;
+        border-left: 3px solid #fbbf24;
+      }
+
       @media (max-width: 1200px) {
         .compare-layout {
           grid-template-columns: 1fr 1fr 240px;
@@ -358,6 +449,7 @@
             <label>&nbsp;</label>
             <button id="submit">開始比對</button>
             <button id="prefilterBtn" type="button" class="btn-prefilter">LLM 前處理</button>
+            <button id="analyzeBtn" type="button" class="btn-analyze">LLM 分析</button>
           </div>
         </div>
 
@@ -392,6 +484,12 @@
         <div class="status">任務 ID：<span id="job" class="mono">-</span></div>
         <div id="prefilterSummary" class="empty-note" style="margin-top: 6px">尚未執行 LLM 前處理</div>
         <div id="prefilterList" class="prefilter-list"></div>
+
+        <div id="analyzeSection" style="margin-top: 10px; display: none;">
+          <div id="analyzeStatus" class="empty-note"></div>
+          <div id="analyzeOverall" class="analyze-overall" style="display: none;"></div>
+          <div id="analyzeList" class="analyze-list"></div>
+        </div>
       </section>
 
       <section class="compare-layout">
@@ -439,6 +537,11 @@
       const prefilterListEl = document.getElementById("prefilterList");
       const beforePane = document.getElementById("beforePane");
       const afterPane = document.getElementById("afterPane");
+      const analyzeBtn = document.getElementById("analyzeBtn");
+      const analyzeSectionEl = document.getElementById("analyzeSection");
+      const analyzeStatusEl = document.getElementById("analyzeStatus");
+      const analyzeOverallEl = document.getElementById("analyzeOverall");
+      const analyzeListEl = document.getElementById("analyzeList");
 
       let currentJobId = null;
       let syncingScroll = false;
@@ -571,6 +674,11 @@
         exportBtn.disabled = true;
         prefilterSummaryEl.textContent = "尚未執行 LLM 前處理";
         prefilterListEl.innerHTML = "";
+        analyzeSectionEl.style.display = "none";
+        analyzeOverallEl.style.display = "none";
+        analyzeListEl.innerHTML = "";
+        analyzeStatusEl.textContent = "";
+        analyzeStatusEl.classList.remove("err");
         updateProgress(0, 0, "等待開始");
       }
 
@@ -622,6 +730,93 @@
           prefilterSummaryEl.textContent = `前處理失敗：${err.message || err}`;
         } finally {
           prefilterBtn.disabled = false;
+        }
+      }
+
+      async function runAnalyze() {
+        const before = beforeInput.files?.[0];
+        const after = afterInput.files?.[0];
+        if (!before || !after) {
+          setStatus("請先選擇兩份 PDF", true);
+          return;
+        }
+
+        analyzeBtn.disabled = true;
+        analyzeSectionEl.style.display = "block";
+        analyzeOverallEl.style.display = "none";
+        analyzeListEl.innerHTML = "";
+        analyzeStatusEl.textContent = "LLM 分析中，請稍候（依文件大小可能需要數十秒）...";
+
+        try {
+          const form = new FormData();
+          form.append("before", before);
+          form.append("after", after);
+          form.append("image_threshold", "0.03");
+          form.append("text_threshold", "0.08");
+          form.append("min_candidates", "6");
+          form.append("neighbor_window", "1");
+
+          const res = await fetch("/api/compare/analyze", { method: "POST", body: form });
+          if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(errText);
+          }
+          const data = await res.json();
+
+          const pages = data.pages || [];
+          const summary = data.summary || {};
+          analyzeStatusEl.textContent =
+            `LLM 分析完成：共分析 ${pages.length} 個差異頁面（候選 ${summary.candidate_pages || 0} / ${summary.total_slots || 0} 頁）`;
+
+          // 整體摘要
+          if (data.overall_summary) {
+            analyzeOverallEl.style.display = "block";
+            analyzeOverallEl.textContent = `整體摘要：${data.overall_summary}`;
+          }
+
+          // 各頁結果
+          if (!pages.length) {
+            const empty = document.createElement("div");
+            empty.className = "empty-note";
+            empty.textContent = "未偵測到任何差異頁面";
+            analyzeListEl.appendChild(empty);
+            return;
+          }
+
+          const importanceLabel = { high: "高度重要", medium: "一般變更", low: "輕微變更" };
+          const stateLabels = { paired: "配對頁", inserted: "新增頁", deleted: "刪除頁" };
+
+          pages.forEach((p) => {
+            const item = document.createElement("div");
+            item.className = "analyze-item";
+
+            const bp = p.before_page ?? "-";
+            const ap = p.after_page ?? "-";
+            const stateText = stateLabels[p.state] || p.state;
+            const impText = importanceLabel[p.importance] || p.importance;
+
+            item.innerHTML = `
+              <div class="analyze-item-head">
+                <span>槽位 ${p.slot}｜${stateText}（before:${bp} → after:${ap}）</span>
+                <span class="importance-badge ${p.importance}">${impText}</span>
+                <span class="mono" style="font-size:11px;color:#888;margin-left:auto">
+                  image:${(p.image_diff ?? 0).toFixed(3)} text:${(p.text_diff ?? 0).toFixed(3)}
+                </span>
+              </div>
+              <div class="analyze-summary-text">${p.summary || "（無摘要）"}</div>
+              <ul class="analyze-changes">
+                ${(p.changes || []).map((c) =>
+                  `<li class="${c.type}">[${c.type}] ${c.description}</li>`
+                ).join("")}
+              </ul>
+            `;
+            analyzeListEl.appendChild(item);
+          });
+        } catch (err) {
+          analyzeStatusEl.textContent = `LLM 分析失敗：${err.message || err}`;
+          analyzeStatusEl.classList.add("err");
+        } finally {
+          analyzeBtn.disabled = false;
         }
       }
 
@@ -961,6 +1156,7 @@
       applyMarkMode(markModeEl.value);
       submitBtn.addEventListener("click", uploadAndStart);
       prefilterBtn.addEventListener("click", runPrefilter);
+      analyzeBtn.addEventListener("click", runAnalyze);
       exportBtn.addEventListener("click", async () => {
         if (!currentJobId) return;
         exportBtn.disabled = true;

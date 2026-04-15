@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     compare_task_soft_timeout_sec: int = 1200
     compare_task_hard_timeout_sec: int = 1500
 
+    # LLM 分析相關設定
+    llm_base_url: str = "http://192.168.46.226:7777"
+    llm_model: str = "google/gemma-4-31B-it"
+    llm_max_tokens: int = 4096
+    llm_temperature: float = 0.2
+    llm_analyze_dpi: int = 96  # 傳給 LLM 的縮圖解析度，越低 token 越少
+    llm_timeout_sec: int = 300  # 單次 LLM 請求逾時秒數
+
     model_config = SettingsConfigDict(env_file=".env", env_prefix="PDF_COMPARE_")
 
     @property
