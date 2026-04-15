@@ -58,11 +58,31 @@ python scripts/smoke_test.py --mode smart
 
 ## 9. 重要 API 補充
 
+- `POST /api/compare/prefilter`：LLM 前處理，快速挑出候選差異頁
 - `GET /api/compare/{job_id}/pages`：一次取回頁面清單（前端 lazy 顯示）
 - `POST /api/compare/{job_id}/cancel`：請求取消任務
 - `POST /api/compare/{job_id}/export`：背景排程產生匯出 PDF
 - `GET /api/compare/{job_id}/export`：查詢匯出狀態
 - `GET /api/compare/{job_id}/export/download`：下載匯出 PDF
+
+### `POST /api/compare/prefilter` 說明
+
+用途：在送 LLM 之前，先做頁級快速篩選。
+
+- 輸入：`before`、`after`（PDF）
+- 可選參數：`image_threshold`、`text_threshold`、`min_candidates`、`neighbor_window`
+- 輸出：
+  - `candidates`：建議送 LLM 的頁面
+  - `all_pages`：全部頁面的分數與原因
+
+前處理主要看兩種分數：
+
+- `image_diff`：影像差異（0~1）
+- `text_diff`：文字差異（0~1）
+
+新增頁 / 刪除頁會直接列入候選。
+
+為什麼快：只做頁級打分，不做完整框選與遮罩輸出。
 
 ## 10. Docker Compose（可選）
 

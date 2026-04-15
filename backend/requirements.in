@@ -1,0 +1,13 @@
+# 直接依賴（你的程式直接 import 的套件）
+# 只寫套件名與最小版本，版本管理由 pip-compile 自動鎖定
+
+fastapi>=0.100
+uvicorn[standard]>=0.30
+python-multipart>=0.0.20
+celery>=5.3
+redis>=5.0
+pydantic>=2.0
+pydantic-settings>=2.0
+PyMuPDF>=1.20
+opencv-python-headless>=4.8
+numpy>=2.0
