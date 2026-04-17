@@ -479,7 +479,7 @@
             <input id="hideSmallDiff" type="checkbox" />
             隱藏相差小
           </label>
-          <button id="exportBtn" type="button" class="btn-secondary" disabled>匯出結果 PDF</button>
+
         </div>
         <div class="status">任務 ID：<span id="job" class="mono">-</span></div>
         <div id="prefilterSummary" class="empty-note" style="margin-top: 6px">尚未執行 LLM 前處理</div>
@@ -532,7 +532,6 @@
       const markModeEl = document.getElementById("markMode");
       const onlyDiffPagesEl = document.getElementById("onlyDiffPages");
       const hideSmallDiffEl = document.getElementById("hideSmallDiff");
-      const exportBtn = document.getElementById("exportBtn");
       const prefilterSummaryEl = document.getElementById("prefilterSummary");
       const prefilterListEl = document.getElementById("prefilterList");
       const beforePane = document.getElementById("beforePane");
@@ -671,7 +670,6 @@
         diffListEl.innerHTML = "";
         cachedPages = [];
         summaryEl.textContent = "尚未產生比對結果";
-        exportBtn.disabled = true;
         prefilterSummaryEl.textContent = "尚未執行 LLM 前處理";
         prefilterListEl.innerHTML = "";
         analyzeSectionEl.style.display = "none";
@@ -887,7 +885,6 @@
             updateProgress(total || 1, total || 1, "載入結果中");
             await loadAllPages(jobId, total || 0);
             updateProgress(total || 1, total || 1, "完成");
-            exportBtn.disabled = false;
             return;
           }
           if (data.status === "failed") {
@@ -1157,33 +1154,6 @@
       submitBtn.addEventListener("click", uploadAndStart);
       prefilterBtn.addEventListener("click", runPrefilter);
       analyzeBtn.addEventListener("click", runAnalyze);
-      exportBtn.addEventListener("click", async () => {
-        if (!currentJobId) return;
-        exportBtn.disabled = true;
-        try {
-          await fetch(`/api/compare/${currentJobId}/export`, { method: "POST" });
-          setStatus("正在準備匯出檔...");
-
-          while (true) {
-            const res = await fetch(`/api/compare/${currentJobId}/export`);
-            if (!res.ok) throw new Error("查詢匯出狀態失敗");
-            const data = await res.json();
-            if (data.status === "done" && data.download_url) {
-              window.open(data.download_url, "_blank");
-              setStatus("匯出完成，已開始下載");
-              break;
-            }
-            if (data.status === "failed") {
-              throw new Error(data.message || "匯出失敗");
-            }
-            await new Promise((resolve) => setTimeout(resolve, 900));
-          }
-        } catch (err) {
-          setStatus(`匯出失敗：${err.message || err}`, true);
-        } finally {
-          exportBtn.disabled = false;
-        }
-      });
     </script>
   </body>
 </html>

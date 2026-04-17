@@ -79,6 +79,17 @@
 
 這個流程比完整 smart 比對快很多，因為它只做頁級打分，不產生完整遮罩與差異框輸出。
 
+### LLM 前處理所用技術（供開發日誌）
+
+- 核心定位：這是一個送進 vLLM 之前的頁級 prefilter，用來先挑出值得分析的候選頁，而不是另一個 LLM 或 embedding 流程。
+- PDF 處理：使用 PyMuPDF（`fitz`）取得頁數、將 PDF 低解析度渲染成 PNG，並抽取每頁文字層。
+- 頁面配對：沿用 smart page map，先把頁面縮成灰階縮圖，再用平均絕對差（MAD）估算影像相似度，搭配 `difflib.SequenceMatcher` 的文字相似度做加權，最後用動態規劃找整份文件的最佳配對路徑。
+- 差異打分：對配對頁使用 OpenCV 做灰階讀圖、尺寸對齊、Gaussian blur 與 `absdiff`，得到 `image_diff`；文字部分則以 `SequenceMatcher` 轉成 `text_diff`。
+- 候選規則：新增頁與刪除頁直接列入候選；其餘頁面依影像與文字閾值判定，並支援結構變更鄰近頁擴張與候選不足時的高分補齊。
+- 實作特性：流程只輸出候選頁與分數，不產生完整遮罩、morphology 或 connected components，因此速度明顯比完整 smart 比對更快。
+
+可直接寫成一句話：LLM 前處理採 PyMuPDF 低解析度渲染、OpenCV 輕量影像差異與 `difflib.SequenceMatcher` 文字差異，並沿用 smart 頁面配對（縮圖 MAD + 文字加權 + 動態規劃）篩出候選頁，以降低送入 vLLM 的頁數與 token。
+
 ### 目前程式實作的判定細節
 
 上面是概念流程；依目前程式碼，實際偵測規則還包含以下幾點：

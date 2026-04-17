@@ -1,7 +1,6 @@
 from app.core.config import get_settings
 from app.services.diff_fast import compare_images
 from app.services.diff_smart import plan_smart_mapping
-from app.services.export_result import build_result_pdf
 from app.services.render import extract_page_texts, get_page_count, render_pdf_pages
 from app.services.storage import cleanup_expired_jobs, load_meta, save_meta, write_json
 from app.workers.celery_app import celery_app
@@ -153,31 +152,7 @@ def run_compare_job(job_id: str, mode: str) -> None:
         raise
 
 
-@celery_app.task(name="app.workers.tasks.run_export_job")
-def run_export_job(job_id: str) -> None:
-    settings = get_settings()
-    job_root = settings.jobs_root / job_id
-    meta = load_meta(settings, job_id)
-    if not meta:
-        return
 
-    export_meta = meta.get("export", {})
-    export_meta["status"] = "running"
-    export_meta["message"] = "匯出中"
-    meta["export"] = export_meta
-    save_meta(settings, job_id, meta)
-
-    try:
-        output_pdf = build_result_pdf(job_root)
-        export_meta["status"] = "done"
-        export_meta["message"] = "匯出完成"
-        export_meta["file"] = str(output_pdf.name)
-        meta["export"] = export_meta
-        save_meta(settings, job_id, meta)
-    except Exception as exc:
-        export_meta["status"] = "failed"
-        export_meta["message"] = str(exc)
-        meta["export"] = export_meta
         save_meta(settings, job_id, meta)
         raise
 

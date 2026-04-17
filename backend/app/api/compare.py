@@ -5,8 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.core.config import Settings, get_settings
 from app.models.schemas import (
@@ -25,7 +24,7 @@ from app.services.storage import (
 )
 from app.services.prefilter import Thresholds, build_prefilter_report
 from app.services.llm_analyze import build_analyze_report
-from app.workers.tasks import run_compare_job, run_export_job
+from app.workers.tasks import run_compare_job
 
 router = APIRouter(prefix="/compare", tags=["compare"])
 
@@ -350,66 +349,4 @@ def cleanup_jobs(settings: Settings = Depends(get_settings)) -> dict:
     return cleanup_expired_jobs(settings)
 
 
-@router.post("/{job_id}/export")
-def export_compare_result(
-    job_id: str,
-    force: bool = Query(False),
-    settings: Settings = Depends(get_settings),
-) -> dict:
-    job_root = _job_root(settings, job_id)
-    if not job_root.exists():
-        raise HTTPException(status_code=404, detail="找不到任務")
 
-    meta = load_meta(settings, job_id)
-    if not meta:
-        raise HTTPException(status_code=404, detail="找不到任務")
-    if meta.get("status") != "done":
-        raise HTTPException(status_code=400, detail="任務尚未完成，無法匯出")
-
-    export_meta = meta.get("export", {})
-    status = export_meta.get("status")
-    if force or status not in {"queued", "running"}:
-        meta["export"] = {
-            "status": "queued",
-            "message": "排隊中",
-            "file": None,
-        }
-        save_meta(settings, job_id, meta)
-        run_export_job.apply_async(args=[job_id])
-
-    return {"ok": True, "status": meta.get("export", {}).get("status", "queued")}
-
-
-@router.get("/{job_id}/export")
-def get_export_status(job_id: str, settings: Settings = Depends(get_settings)) -> dict:
-    job_root = _job_root(settings, job_id)
-    if not job_root.exists():
-        raise HTTPException(status_code=404, detail="找不到任務")
-
-    meta = load_meta(settings, job_id)
-    if not meta:
-        raise HTTPException(status_code=404, detail="找不到任務")
-
-    export_meta = meta.get("export", {"status": "idle", "message": "尚未匯出"})
-    download_url = None
-    if export_meta.get("status") == "done":
-        download_url = f"{settings.api_prefix}/compare/{job_id}/export/download"
-    return {
-        "status": export_meta.get("status", "idle"),
-        "message": export_meta.get("message"),
-        "download_url": download_url,
-    }
-
-
-@router.get("/{job_id}/export/download")
-def download_export(
-    job_id: str, settings: Settings = Depends(get_settings)
-) -> FileResponse:
-    output_pdf = _job_root(settings, job_id) / "export" / "result_preview.pdf"
-    if not output_pdf.exists():
-        raise HTTPException(status_code=404, detail="尚未產生匯出檔")
-    return FileResponse(
-        output_pdf,
-        media_type="application/pdf",
-        filename=f"compare-{job_id}.pdf",
-    )
