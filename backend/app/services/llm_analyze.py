@@ -185,6 +185,32 @@ def _build_page_message_content(
     return content
 
 
+def _build_structure_context(candidates: list[dict]) -> str:
+    """
+    根據候選頁列表，產生一段結構摘要文字，
+    說明整份文件的頁面對應關係（包含新增/刪除頁），
+    讓 LLM 在分析時能理解章節號碼偏移的脈絡。
+    """
+    lines = ["【整份文件頁面對應關係】"]
+    for c in sorted(candidates, key=lambda x: int(x["slot"])):
+        slot = c["slot"]
+        state = c["state"]
+        bp = c.get("before_page")
+        ap = c.get("after_page")
+        if state == "inserted":
+            lines.append(f"  Slot {slot:2d}: 【新增頁】新版第 {ap} 頁（舊版無此頁）")
+        elif state == "deleted":
+            lines.append(f"  Slot {slot:2d}: 【刪除頁】舊版第 {bp} 頁（新版已移除）")
+        else:
+            lines.append(f"  Slot {slot:2d}: 舊版第 {bp} 頁 ↔ 新版第 {ap} 頁")
+    lines.append(
+        "\n⚠️ 注意：若文件中有新增頁（inserted），其後的頁面章節號碼會整體遞移。"
+        "請勿因章節號碼改變（如 5.5.6→5.5.7）就判斷為刪除，"
+        "應比對內容是否仍存在於新版中。"
+    )
+    return "\n".join(lines)
+
+
 def _build_prompt(
     candidates: list[dict],
     before_render_dir: Path,
@@ -214,6 +240,12 @@ def _build_prompt(
 - 若圖片與文字差異不一致，以**文字差異為準**，但仍說明圖片目視結果
 - 就算差異看似微小，只要確認存在差異，就必須如實列出，不得略過
 
+《章節號碼偏移判斷規則》
+當文件中有新增頁（inserted）或刪除頁（deleted）時，後續章節的編號會整體偏移。
+- 若 before 頁有「5.5.6 OQC」，after 頁有「5.5.7 OQC」，內容相同 → 應判斷為 modified（章節號碼因新增章節而遞移），**不得**判斷為 removed
+- 只有當某段內容在 before 存在，且在整個 after 文件中完全找不到對應內容時，才能判斷為 removed
+- 章節號碼的改變本身屬於 modified（格式/編號調整），重要度通常為 low 或 medium
+
 請嚴格依照以下 JSON 格式回傳，不要輸出任何格式說明文字，只輸出 JSON：
 
 {
@@ -235,7 +267,7 @@ def _build_prompt(
 重要度判斷標準：
 - high：涉及金額、日期、關鍵條款、數字、當事人名稱等實質性修改
 - medium：版面調整、段落移位、格式變更、小幅文字修訂
-- low：標點符號、空白、排版微調、無實質影響的字詞替換
+- low：標點符號、空白、排版微調、無實質影響的字詞替換、章節號碼因新增章節而遞移
 
 注意：
 - 若某槽位是「新增頁」（inserted），代表該頁是新版才有的，請完整描述新增的頁面內容
@@ -244,9 +276,12 @@ def _build_prompt(
 - 就算差異看似微小，只要確認存在差異，就必須如實列出，不得略過
 """
 
+    # 結構摘要：讓 LLM 了解整份文件頁面配對關係
+    structure_context = _build_structure_context(candidates)
+
     # 使用者 message 的 content 是一個 list（multimodal）
     user_content: list[dict] = [
-        {"type": "text", "text": f"以下共有 {len(candidates)} 個差異頁面需要分析：\n"}
+        {"type": "text", "text": f"{structure_context}\n\n以下共有 {len(candidates)} 個差異頁面需要分析：\n"}
     ]
 
     for entry in candidates:
