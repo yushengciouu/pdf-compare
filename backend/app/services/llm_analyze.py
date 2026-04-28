@@ -141,8 +141,11 @@ def _build_page_message_content(
         "inserted": "新增頁（僅出現在新版）",
         "deleted": "刪除頁（僅存在於舊版）",
     }.get(state, state)
+    before_page_label = f"第 {before_page} 頁" if before_page is not None else "N/A"
+    after_page_label = f"第 {after_page} 頁" if after_page is not None else "N/A"
     header = (
         f"=== 比對槽位 {slot}：{state_label} ===\n"
+        f"舊版頁碼: {before_page_label}  |  新版頁碼: {after_page_label}\n"
         f"圖像差異分數: {image_diff:.3f}  |  文字差異分數: {text_diff:.3f}  |  標記原因: {reason}\n"
     )
 

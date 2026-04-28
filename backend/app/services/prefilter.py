@@ -15,7 +15,7 @@ from app.services.render import extract_page_texts, get_page_count, render_pdf_p
 
 @dataclass
 class Thresholds:
-    image: float = 0.02   # 降低門檻：避免細微視覺差異（如單一數字）被過濾
+    image: float = 0.001  # 顯著變化像素比例（>15/255），對稀疏改動（如TOC頁碼、新增表格行）靈敏
     text: float = 0.05    # 降低門檻：避免少量文字修訂被過濾
     min_candidates: int = 6
     neighbor_window: int = 1
@@ -38,7 +38,10 @@ def _image_diff_score(before_png: Path, after_png: Path) -> float:
     img_b = cv2.GaussianBlur(img_b, (3, 3), 0)
 
     diff = cv2.absdiff(img_a, img_b)
-    return float(diff.mean() / 255.0)
+    # 使用「顯著變化像素比例」而非全頁均值
+    # 原因：均值會將稀疏但明顯的改動（如 TOC 頁碼、新增表格行）稀釋到門檻值以下
+    # pixel_threshold=15 對應 diff_threshold=25 的較寬鬆版本（prefilter 用低解析度圖）
+    return float((diff > 15).mean())
 
 
 def _text_diff_score(text_a: str, text_b: str) -> float:

@@ -77,8 +77,8 @@ async def create_compare_job(
 async def run_prefilter(
     before: Annotated[UploadFile, File(...)],
     after: Annotated[UploadFile, File(...)],
-    image_threshold: Annotated[float, Form()] = 0.03,
-    text_threshold: Annotated[float, Form()] = 0.08,
+    image_threshold: Annotated[float, Form()] = 0.001,
+    text_threshold: Annotated[float, Form()] = 0.05,
     min_candidates: Annotated[int, Form()] = 6,
     neighbor_window: Annotated[int, Form()] = 1,
     settings: Settings = Depends(get_settings),
@@ -109,8 +109,8 @@ async def run_prefilter(
 async def run_llm_analyze(
     before: Annotated[UploadFile, File(...)],
     after: Annotated[UploadFile, File(...)],
-    image_threshold: Annotated[float, Form()] = 0.03,
-    text_threshold: Annotated[float, Form()] = 0.08,
+    image_threshold: Annotated[float, Form()] = 0.001,
+    text_threshold: Annotated[float, Form()] = 0.05,
     min_candidates: Annotated[int, Form()] = 6,
     neighbor_window: Annotated[int, Form()] = 1,
     settings: Settings = Depends(get_settings),
