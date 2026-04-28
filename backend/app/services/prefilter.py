@@ -15,7 +15,7 @@ from app.services.render import extract_page_texts, get_page_count, render_pdf_p
 
 @dataclass
 class Thresholds:
-    image: float = 0.001  # 顯著變化像素比例（>15/255），對稀疏改動（如TOC頁碼、新增表格行）靈敏
+    image: float = 0.005  # 顯著變化像素比例（>15/255），對稀疏改動（如TOC頁碼、新增表格行）靈敏
     text: float = 0.05    # 降低門檻：避免少量文字修訂被過濾
     min_candidates: int = 6
     neighbor_window: int = 1
