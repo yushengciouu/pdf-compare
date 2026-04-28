@@ -80,9 +80,9 @@ def _make_text_diff(before_text: str, after_text: str) -> str:
     if not before_text and not after_text:
         return ""
     if not before_text:
-        return f"+ {after_text[:800]}"  # 全新頁，只顯示 after 文字（限長）
+        return f"+ {after_text[:1500]}"  # 全新頁，只顯示 after 文字（限長）
     if not after_text:
-        return f"- {before_text[:800]}"  # 刪除頁，只顯示 before 文字（限長）
+        return f"- {before_text[:1500]}"  # 删除頁，只顯示 before 文字（限長）
 
     before_lines = before_text.splitlines(keepends=True)
     after_lines = after_text.splitlines(keepends=True)
@@ -102,7 +102,7 @@ def _make_text_diff(before_text: str, after_text: str) -> str:
         return "(文字內容無差異)"
 
     # 限制總長度，避免 token 爆炸
-    MAX_CHARS = 1200
+    MAX_CHARS = 2500
     result = "\n".join(diff_lines)
     if len(result) > MAX_CHARS:
         result = result[:MAX_CHARS] + "\n...(文字差異過長，已截斷)"
@@ -201,7 +201,15 @@ def _build_prompt(
 - 兩版的文字差異（unified diff 格式）
 - 圖像差異分數與文字差異分數（0 ~ 1，越高代表差異越大）
 
-請針對每個槽位，分析實際修改的內容，並以**繁體中文**回答。
+請針對每個槽位，仔細分析實際修改的內容，並以**繁體中文**回答。
+
+《分析重點》
+- 小心比對圖片中的**每一個數字、日期、金額、人名、地址**是否有變更
+- 對照文字差異（unified diff）逐行檢查，不得漏掉任何以「+」或「-」開頭的行
+- 就算圖像差異分數小，也要仔細檢查文字差異中的內容
+- 對於表格、清單、整列的資料，請逐格比對各格數字是否一致
+- 若圖片與文字差異不一致，以**文字差異為準**，但仍說明圖片目視結果
+- 就算差異看似微小，只要確認存在差異，就必須如實列出，不得略過
 
 請嚴格依照以下 JSON 格式回傳，不要輸出任何格式說明文字，只輸出 JSON：
 
@@ -215,7 +223,7 @@ def _build_prompt(
       "changes": [
         {"type": "added", "description": "（新增了什麼）"},
         {"type": "removed", "description": "（刪除了什麼）"},
-        {"type": "modified", "description": "（修改了什麼，從什麼改成什麼）"}
+        {"type": "modified", "description": "（修改了什麼，從「舊內容」改為「新內容」）"}
       ]
     }
   ]
@@ -227,9 +235,10 @@ def _build_prompt(
 - low：標點符號、空白、排版微調、無實質影響的字詞替換
 
 注意：
-- 若某槽位是「新增頁」（inserted），代表該頁是新版才有的，請描述新增的頁面內容
-- 若某槽位是「刪除頁」（deleted），代表該頁在新版中被移除，請描述被刪除的頁面內容
+- 若某槽位是「新增頁」（inserted），代表該頁是新版才有的，請完整描述新增的頁面內容
+- 若某槽位是「刪除頁」（deleted），代表該頁在新版中被移除，請完整描述被刪除的頁面內容
 - 若圖片看不清楚，請以文字差異為主進行分析
+- 就算差異看似微小，只要確認存在差異，就必須如實列出，不得略過
 """
 
     # 使用者 message 的 content 是一個 list（multimodal）

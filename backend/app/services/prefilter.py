@@ -15,8 +15,8 @@ from app.services.render import extract_page_texts, get_page_count, render_pdf_p
 
 @dataclass
 class Thresholds:
-    image: float = 0.03
-    text: float = 0.08
+    image: float = 0.02   # 降低門檻：避免細微視覺差異（如單一數字）被過濾
+    text: float = 0.05    # 降低門檻：避免少量文字修訂被過濾
     min_candidates: int = 6
     neighbor_window: int = 1
 
