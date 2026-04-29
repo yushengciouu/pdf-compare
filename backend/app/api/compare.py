@@ -22,8 +22,8 @@ from app.services.storage import (
     new_job,
     save_meta,
 )
-from app.services.prefilter import Thresholds, build_prefilter_report
 from app.services.llm_analyze import build_analyze_report
+from app.services.prefilter import Thresholds
 from app.workers.tasks import run_compare_job
 
 router = APIRouter(prefix="/compare", tags=["compare"])
@@ -71,38 +71,6 @@ async def create_compare_job(
 
     run_compare_job.apply_async(args=[job_id, mode])
     return CompareCreateResponse(job_id=job_id, status="queued", mode=mode)
-
-
-@router.post("/prefilter")
-async def run_prefilter(
-    before: Annotated[UploadFile, File(...)],
-    after: Annotated[UploadFile, File(...)],
-    image_threshold: Annotated[float, Form()] = 0.005,
-    text_threshold: Annotated[float, Form()] = 0.05,
-    min_candidates: Annotated[int, Form()] = 6,
-    neighbor_window: Annotated[int, Form()] = 1,
-    settings: Settings = Depends(get_settings),
-) -> dict:
-    _validate_pdf(before)
-    _validate_pdf(after)
-
-    temp_dir = Path(tempfile.mkdtemp(prefix="pdf-prefilter-upload-"))
-    try:
-        max_bytes = settings.max_pdf_mb * 1024 * 1024
-        before_path = temp_dir / "before.pdf"
-        after_path = temp_dir / "after.pdf"
-        await _save_upload(before, before_path, max_bytes)
-        await _save_upload(after, after_path, max_bytes)
-
-        thresholds = Thresholds(
-            image=max(0.0, min(1.0, image_threshold)),
-            text=max(0.0, min(1.0, text_threshold)),
-            min_candidates=max(1, min(1000, int(min_candidates))),
-            neighbor_window=max(0, min(5, int(neighbor_window))),
-        )
-        return build_prefilter_report(before_path, after_path, settings, thresholds)
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 @router.post("/analyze", response_model=AnalyzeResponse)
