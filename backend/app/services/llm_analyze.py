@@ -423,9 +423,15 @@ def build_analyze_report(
     after_render_dir = temp_root / "after"
 
     try:
-        # Step 1：執行 prefilter，取得候選頁
+        # Step 1：以 analyze DPI 渲染（只渲染一次，prefilter 與 LLM 共用）
+        render_pdf_pages(before_pdf, before_render_dir, settings.llm_analyze_dpi)
+        render_pdf_pages(after_pdf, after_render_dir, settings.llm_analyze_dpi)
+
+        # Step 2：執行 prefilter，複用已渲染的圖片，不重複渲染
         prefilter_report = build_prefilter_report(
-            before_pdf, after_pdf, settings, thresholds
+            before_pdf, after_pdf, settings, thresholds,
+            before_render_dir=before_render_dir,
+            after_render_dir=after_render_dir,
         )
         candidates: list[dict] = prefilter_report["candidates"]
 
@@ -436,10 +442,6 @@ def build_analyze_report(
                 "overall_summary": "未偵測到任何差異頁面",
                 "pages": [],
             }
-
-        # Step 2：以 analyze DPI 渲染（比完整比對低，節省 token）
-        render_pdf_pages(before_pdf, before_render_dir, settings.llm_analyze_dpi)
-        render_pdf_pages(after_pdf, after_render_dir, settings.llm_analyze_dpi)
 
         # Step 3：提取文字層
         before_texts = extract_page_texts(before_pdf)

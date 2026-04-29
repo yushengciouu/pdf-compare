@@ -118,9 +118,6 @@
       .btn-secondary {
         background: #1f7a4d;
       }
-      .btn-prefilter {
-        background: #7a4a1f;
-      }
       .status {
         margin-top: 12px;
         font-size: 14px;
@@ -298,19 +295,6 @@
         font-size: 13px;
         line-height: 1.5;
       }
-      .prefilter-list {
-        display: grid;
-        gap: 6px;
-        margin-top: 8px;
-      }
-      .prefilter-item {
-        border: 1px solid #d9e1ea;
-        border-radius: 8px;
-        padding: 6px 8px;
-        font-size: 12px;
-        background: #f9fbfd;
-      }
-
       /* LLM 分析結果 */
       .btn-analyze {
         background: #5a2d91;
@@ -447,8 +431,7 @@
           </div>
           <div class="action-col">
             <label>&nbsp;</label>
-            <button id="submit">開始比對</button>
-            <button id="prefilterBtn" type="button" class="btn-prefilter">LLM 前處理</button>
+            <button id="submit">影像分析</button>
             <button id="analyzeBtn" type="button" class="btn-analyze">LLM 分析</button>
           </div>
         </div>
@@ -482,9 +465,6 @@
 
         </div>
         <div class="status">任務 ID：<span id="job" class="mono">-</span></div>
-        <div id="prefilterSummary" class="empty-note" style="margin-top: 6px">尚未執行 LLM 前處理</div>
-        <div id="prefilterList" class="prefilter-list"></div>
-
         <div id="analyzeSection" style="margin-top: 10px; display: none;">
           <div id="analyzeStatus" class="empty-note"></div>
           <div id="analyzeOverall" class="analyze-overall" style="display: none;"></div>
@@ -516,7 +496,6 @@
       const afterInput = document.getElementById("after");
       const modeInput = document.getElementById("mode");
       const submitBtn = document.getElementById("submit");
-      const prefilterBtn = document.getElementById("prefilterBtn");
       const statusEl = document.getElementById("status");
       const jobEl = document.getElementById("job");
       const beforePagesEl = document.getElementById("beforePages");
@@ -532,8 +511,6 @@
       const markModeEl = document.getElementById("markMode");
       const onlyDiffPagesEl = document.getElementById("onlyDiffPages");
       const hideSmallDiffEl = document.getElementById("hideSmallDiff");
-      const prefilterSummaryEl = document.getElementById("prefilterSummary");
-      const prefilterListEl = document.getElementById("prefilterList");
       const beforePane = document.getElementById("beforePane");
       const afterPane = document.getElementById("afterPane");
       const analyzeBtn = document.getElementById("analyzeBtn");
@@ -670,65 +647,12 @@
         diffListEl.innerHTML = "";
         cachedPages = [];
         summaryEl.textContent = "尚未產生比對結果";
-        prefilterSummaryEl.textContent = "尚未執行 LLM 前處理";
-        prefilterListEl.innerHTML = "";
         analyzeSectionEl.style.display = "none";
         analyzeOverallEl.style.display = "none";
         analyzeListEl.innerHTML = "";
         analyzeStatusEl.textContent = "";
         analyzeStatusEl.classList.remove("err");
         updateProgress(0, 0, "等待開始");
-      }
-
-      async function runPrefilter() {
-        const before = beforeInput.files?.[0];
-        const after = afterInput.files?.[0];
-        if (!before || !after) {
-          setStatus("請先選擇兩份 PDF", true);
-          return;
-        }
-
-        prefilterBtn.disabled = true;
-        prefilterSummaryEl.textContent = "LLM 前處理執行中...";
-        prefilterListEl.innerHTML = "";
-        try {
-          const form = new FormData();
-          form.append("before", before);
-          form.append("after", after);
-          form.append("image_threshold", "0.005");
-          form.append("text_threshold", "0.05");
-          form.append("min_candidates", "6");
-          form.append("neighbor_window", "1");
-
-          const res = await fetch("/api/compare/prefilter", { method: "POST", body: form });
-          if (!res.ok) throw new Error(await res.text());
-          const data = await res.json();
-
-          const candidates = data.candidates || [];
-          const summary = data.summary || {};
-          prefilterSummaryEl.textContent = `前處理完成：候選頁 ${summary.candidate_pages || 0} / ${summary.total_slots || 0}`;
-
-          if (!candidates.length) {
-            const row = document.createElement("div");
-            row.className = "prefilter-item";
-            row.textContent = "目前沒有建議送 LLM 的頁面";
-            prefilterListEl.appendChild(row);
-            return;
-          }
-
-          candidates.forEach((c) => {
-            const row = document.createElement("div");
-            row.className = "prefilter-item";
-            const bp = c.before_page ?? "-";
-            const ap = c.after_page ?? "-";
-            row.textContent = `Slot ${c.slot} | before:${bp} after:${ap} | ${c.reason} | image:${c.image_diff} text:${c.text_diff}`;
-            prefilterListEl.appendChild(row);
-          });
-        } catch (err) {
-          prefilterSummaryEl.textContent = `前處理失敗：${err.message || err}`;
-        } finally {
-          prefilterBtn.disabled = false;
-        }
       }
 
       async function runAnalyze() {
@@ -1152,7 +1076,6 @@
       applyPageScale(zoomRangeEl.value);
       applyMarkMode(markModeEl.value);
       submitBtn.addEventListener("click", uploadAndStart);
-      prefilterBtn.addEventListener("click", runPrefilter);
       analyzeBtn.addEventListener("click", runAnalyze);
     </script>
   </body>

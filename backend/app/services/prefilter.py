@@ -58,18 +58,27 @@ def build_prefilter_report(
     after_pdf: Path,
     settings: Settings,
     thresholds: Thresholds | None = None,
+    before_render_dir: Path | None = None,
+    after_render_dir: Path | None = None,
 ) -> dict:
     thresholds = thresholds or Thresholds()
-    temp_root = Path(mkdtemp(prefix="pdf-prefilter-"))
-    before_dir = temp_root / "before"
-    after_dir = temp_root / "after"
+    _owns_temp = before_render_dir is None
+    if _owns_temp:
+        temp_root = Path(mkdtemp(prefix="pdf-prefilter-"))
+        before_dir = temp_root / "before"
+        after_dir = temp_root / "after"
+    else:
+        temp_root = None
+        before_dir = before_render_dir
+        after_dir = after_render_dir
 
     try:
         pages_before = get_page_count(before_pdf)
         pages_after = get_page_count(after_pdf)
 
-        render_pdf_pages(before_pdf, before_dir, max(96, settings.render_dpi // 2))
-        render_pdf_pages(after_pdf, after_dir, max(96, settings.render_dpi // 2))
+        if _owns_temp:
+            render_pdf_pages(before_pdf, before_dir, max(96, settings.render_dpi // 2))
+            render_pdf_pages(after_pdf, after_dir, max(96, settings.render_dpi // 2))
 
         before_texts = extract_page_texts(before_pdf)
         after_texts = extract_page_texts(after_pdf)
@@ -215,4 +224,5 @@ def build_prefilter_report(
             "all_pages": entries,
         }
     finally:
-        shutil.rmtree(temp_root, ignore_errors=True)
+        if _owns_temp and temp_root is not None:
+            shutil.rmtree(temp_root, ignore_errors=True)
