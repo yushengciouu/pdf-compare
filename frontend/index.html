@@ -442,9 +442,9 @@
           <div id="progressText" class="progress-text">0%</div>
         </div>
         <div class="view-controls">
-          <label for="zoomRange">預覽大小</label>
-          <input id="zoomRange" type="range" min="100" max="140" step="10" value="100" />
-          <span id="zoomText" class="mono">標準</span>
+          <label for="zoomRange" style="display:none">預覽大小</label>
+          <input id="zoomRange" type="range" min="100" max="140" step="10" value="140" style="display:none" />
+          <span id="zoomText" class="mono" style="display:none">超大</span>
           <label for="maskOpacity" class="mono">遮罩</label>
           <input id="maskOpacity" class="mini-range" type="range" min="25" max="85" step="5" value="56" />
           <span id="maskOpacityText" class="mono">56%</span>
@@ -483,7 +483,7 @@
           <div id="afterPages" class="pages"></div>
         </section>
 
-        <aside class="diff-panel">
+        <aside class="diff-panel" style="display:none">
           <h3>差異清單</h3>
           <div id="summary" class="empty-note">尚未產生比對結果</div>
           <div id="diffList" class="diff-list" style="margin-top: 8px"></div>
@@ -1073,7 +1073,7 @@
         }
       });
 
-      applyPageScale(zoomRangeEl.value);
+      applyPageScale(140);
       applyMarkMode(markModeEl.value);
       submitBtn.addEventListener("click", uploadAndStart);
       analyzeBtn.addEventListener("click", runAnalyze);
