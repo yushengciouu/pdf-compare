@@ -1,8 +1,34 @@
 from pathlib import Path
+from collections import Counter
 from difflib import SequenceMatcher
 
 import cv2
 import numpy as np
+
+
+def _strip_boilerplate(texts: list[str], threshold: float = 0.4) -> list[str]:
+    """
+    找出在超過 threshold 比例頁面中出現的行（頁腳/頁首樣板），
+    對每頁文字移除這些行後回傳。
+    """
+    if not texts:
+        return texts
+    line_count: Counter = Counter()
+    for t in texts:
+        seen: set[str] = set()
+        for line in t.splitlines():
+            line = line.strip()
+            if line and line not in seen:
+                line_count[line] += 1
+                seen.add(line)
+    total = len(texts)
+    boilerplate = {line for line, cnt in line_count.items() if cnt / total >= threshold}
+
+    result = []
+    for t in texts:
+        lines = [l for l in t.splitlines() if l.strip() not in boilerplate]
+        result.append("\n".join(lines))
+    return result
 
 
 def _extract_signature(image_path: Path, thumb_size: int) -> np.ndarray:
@@ -95,12 +121,22 @@ def build_smart_page_map(
     sig_before = _build_signatures(before_render_dir, pages_before, thumb_size)
     sig_after = _build_signatures(after_render_dir, pages_after, thumb_size)
 
+    # 移除共同樣板文字，讓文字相似度更能區分頁面內容
+    if before_texts is not None and after_texts is not None:
+        all_texts = list(before_texts) + list(after_texts)
+        stripped = _strip_boilerplate(all_texts)
+        stripped_before = stripped[:len(before_texts)]
+        stripped_after = stripped[len(before_texts):]
+    else:
+        stripped_before = before_texts
+        stripped_after = after_texts
+
     sims = np.zeros((pages_before, pages_after), dtype=np.float32)
     for i in range(pages_before):
         for j in range(pages_after):
             image_sim = _similarity(sig_before[i], sig_after[j])
-            if before_texts is not None and after_texts is not None:
-                text_sim = _text_similarity(before_texts[i], after_texts[j])
+            if stripped_before is not None and stripped_after is not None:
+                text_sim = _text_similarity(stripped_before[i], stripped_after[j])
                 sims[i, j] = float(
                     max(
                         0.0,

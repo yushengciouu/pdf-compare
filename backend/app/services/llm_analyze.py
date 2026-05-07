@@ -15,6 +15,7 @@ LLM 分析服務
 from __future__ import annotations
 
 import base64
+import datetime
 import difflib
 import json
 import re
@@ -182,6 +183,24 @@ def _build_page_message_content(
     if text_diff_str:
         content.append({"type": "text", "text": f"【文字層差異】\n{text_diff_str}"})
 
+    # --- 配對頁大幅偏移：附加舊版鄰頁文字供跨頁比對 ---
+    # 若 after_page - before_page >= 3，代表中間可能有整批頁面位移，
+    # 提供 before:page+1 的文字讓 LLM 確認相似內容是否已存在於舊版鄰頁
+    if state == "paired" and before_page is not None and after_page is not None:
+        offset = int(after_page) - int(before_page)
+        if offset >= 3:
+            next_before_idx = int(before_page)  # 0-based index = page+1 - 1 = page
+            if next_before_idx < len(before_texts):
+                neighbor_text = before_texts[next_before_idx][:1500].strip()
+                if neighbor_text:
+                    content.append({
+                        "type": "text",
+                        "text": (
+                            f"【舊版鄰頁文字（第 {int(before_page) + 1} 頁，供跨頁位移比對參考）】\n"
+                            f"{neighbor_text}"
+                        ),
+                    })
+
     return content
 
 
@@ -208,6 +227,39 @@ def _build_structure_context(candidates: list[dict]) -> str:
         "請勿因章節號碼改變（如 5.5.6→5.5.7）就判斷為刪除，"
         "應比對內容是否仍存在於新版中。"
     )
+    return "\n".join(lines)
+
+
+def _build_full_text_index(
+    before_texts: list[str],
+    after_texts: list[str],
+    max_excerpt: int = 120,
+) -> str:
+    """
+    產生舊版/新版所有頁面的文字摘要索引（移除樣板行後取前 max_excerpt 字元）。
+    當有 inserted/deleted 槽位時加入 prompt，
+    讓 LLM 能跨頁搜尋比對，避免把頁面位移誤判為新增或刪除。
+    """
+    from app.services.page_match import _strip_boilerplate
+
+    # 移除樣板行（頁腳/頁首）再擷取摘要
+    all_texts = list(before_texts) + list(after_texts)
+    stripped = _strip_boilerplate(all_texts)
+    stripped_before = stripped[:len(before_texts)]
+    stripped_after = stripped[len(before_texts):]
+
+    lines = [
+        "【全文頁面摘要索引（請在判斷新增/刪除頁前先查閱此索引）】",
+        "B###=舊版頁碼  A###=新版頁碼（已移除共同頁腳樣板）",
+        "─ 舊版 ─",
+    ]
+    for i, text in enumerate(stripped_before, 1):
+        excerpt = text[:max_excerpt].replace("\n", " ").strip()
+        lines.append(f"  B{i:03d}: {excerpt if excerpt else '（空白頁）'}")
+    lines.append("─ 新版 ─")
+    for i, text in enumerate(stripped_after, 1):
+        excerpt = text[:max_excerpt].replace("\n", " ").strip()
+        lines.append(f"  A{i:03d}: {excerpt if excerpt else '（空白頁）'}")
     return "\n".join(lines)
 
 
@@ -246,6 +298,18 @@ def _build_prompt(
 - 只有當某段內容在 before 存在，且在整個 after 文件中完全找不到對應內容時，才能判斷為 removed
 - 章節號碼的改變本身屬於 modified（格式/編號調整），重要度通常為 low 或 medium
 
+《跨頁位移判斷規則（重要）》
+頁面配對演算法偶爾會因版面差異過大而將「位移的頁面」誤標為 inserted 或 deleted。
+此外，「配對頁（paired）」若新版頁碼遠大於舊版頁碼（如 before:13→after:24），
+代表中間有多頁被插入，該配對頁的內容可能來自舊版的「下一頁」而非真正新增。
+
+在對任何「新增頁（inserted）」、「刪除頁（deleted）」或「配對頁中的 added/removed 變更」下結論前，請先執行以下步驟：
+1. 查閱 user 訊息開頭的「全文頁面摘要索引」（B###=舊版各頁摘要，A###=新版各頁摘要）
+2. 若有提供「舊版鄰頁文字（第 N+1 頁）」，務必比對其內容與 after 頁是否相似
+3. 對「新增頁」或「配對頁中的 added 內容」：搜尋其關鍵文字（章節號碼、段落首句）是否已出現在舊版索引（B###）中的某頁 → 若有，則該內容極可能是「頁面位移」而非真正的新增，summary 中應說明「內容源自舊版第 N 頁，可能為頁面位移」，importance 降為 low
+4. 對「刪除頁」或「配對頁中的 removed 內容」：搜尋其關鍵文字是否已出現在新版索引（A###）中的某頁 → 若有，則該內容極可能是「頁面位移」而非真正的刪除，summary 中應說明「內容仍存在於新版第 N 頁，可能為頁面位移」，importance 降為 low
+5. 只有在確認整份文件的另一版本中完全找不到相似內容時，才能判斷為真正的新增或刪除
+
 請嚴格依照以下 JSON 格式回傳，不要輸出任何格式說明文字，只輸出 JSON：
 
 {
@@ -279,9 +343,17 @@ def _build_prompt(
     # 結構摘要：讓 LLM 了解整份文件頁面配對關係
     structure_context = _build_structure_context(candidates)
 
+    # 永遠加入全文頁面索引：不只 inserted/deleted 需要，
+    # paired 頁若有大幅頁碼偏移（如 before:13→after:24）同樣需要索引確認內容是否位移
+    full_text_index = _build_full_text_index(before_texts, after_texts)
+
     # 使用者 message 的 content 是一個 list（multimodal）
+    prefix = structure_context
+    if full_text_index:
+        prefix = f"{full_text_index}\n\n{structure_context}"
+
     user_content: list[dict] = [
-        {"type": "text", "text": f"{structure_context}\n\n以下共有 {len(candidates)} 個差異頁面需要分析：\n"}
+        {"type": "text", "text": f"{prefix}\n\n以下共有 {len(candidates)} 個差異頁面需要分析：\n"}
     ]
 
     for entry in candidates:
@@ -307,6 +379,60 @@ def _build_prompt(
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
     ]
+
+
+def _dump_llm_debug(messages: list[dict], raw_response: str | None = None) -> Path:
+    """
+    將送給 LLM 的 messages 存到 backend/tmp/llm_debug/<timestamp>/，
+    圖片另存為 PNG 檔案，JSON 中以相對路徑取代 base64。
+    若提供 raw_response，一併存為 response.txt。
+    回傳 dump 目錄路徑。
+    """
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    # 相對於此檔案往上兩層到 backend/，再進 tmp/llm_debug
+    debug_root = Path(__file__).parent.parent.parent / "tmp" / "llm_debug" / ts
+    debug_root.mkdir(parents=True, exist_ok=True)
+
+    img_dir = debug_root / "images"
+    img_dir.mkdir(exist_ok=True)
+
+    img_counter = 0
+
+    def _strip_images(content: list[dict] | str) -> list[dict] | str:
+        nonlocal img_counter
+        if isinstance(content, str):
+            return content
+        result = []
+        for item in content:
+            if item.get("type") == "image_url":
+                url = item.get("image_url", {}).get("url", "")
+                if url.startswith("data:image/png;base64,"):
+                    img_counter += 1
+                    fname = f"img_{img_counter:03d}.png"
+                    raw = base64.b64decode(url.split(",", 1)[1])
+                    (img_dir / fname).write_bytes(raw)
+                    result.append({"type": "image_url", "image_url": {"url": f"images/{fname}"}})
+                else:
+                    result.append(item)
+            else:
+                result.append(item)
+        return result
+
+    clean_messages = []
+    for msg in messages:
+        clean_messages.append({
+            "role": msg["role"],
+            "content": _strip_images(msg["content"]),
+        })
+
+    (debug_root / "messages.json").write_text(
+        json.dumps(clean_messages, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    if raw_response is not None:
+        (debug_root / "response.txt").write_text(raw_response, encoding="utf-8")
+
+    return debug_root
 
 
 def _call_llm(messages: list[dict], settings: Settings) -> str:
@@ -456,8 +582,10 @@ def build_analyze_report(
             after_texts,
         )
 
-        # Step 5：呼叫 LLM
+        # Step 5：呼叫 LLM（並 dump debug 資料）
+        _dump_llm_debug(messages)  # 送出前先存 messages
         raw_response = _call_llm(messages, settings)
+        _dump_llm_debug(messages, raw_response)  # 收到回應後補存 response
 
         # Step 6：解析回應
         llm_result = _parse_llm_response(raw_response, candidates)
