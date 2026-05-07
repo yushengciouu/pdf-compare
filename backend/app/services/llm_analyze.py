@@ -452,6 +452,14 @@ def _build_prompt(
 - diff 中 '+' 出現「5.17 MTK Mass Production...」，在所有舊版鄰頁文字中都找不到 5.17
   → 這才是真正新增，列為 added
 
+《圖表編號遞移規則》
+文件新增章節或頁面後，Figure/Table 編號會整體遞移（例如 Figure 5-10 → Figure 5-12、Table 5-2 → Table 5-3）。
+判斷方式：
+- 若 diff 中出現 '+Figure X-N' 或 '+Table X-N'，先查【舊版鄰頁文字】是否有相同用途但編號較小的 'Figure X-M' 或 'Table X-M'（M < N）
+- 若欄位結構、欄位名稱（如 AUTOMOTIVE_PRODUCT、OUTLIER_SCREEN 等）或圖表說明文字實質相同，則這只是**編號遞移**，不是新增
+- 只有當新版圖表的欄位、內容與舊版所有圖表都不相同時，才列為 added
+- 編號遞移本身可列為 modified（描述：Figure 5-10 更名為 Figure 5-12 / Table 5-2 更名為 Table 5-3），importance 為 low
+
 請嚴格依照以下 JSON 格式回傳，不要輸出任何格式說明文字，只輸出 JSON：
 
 {
