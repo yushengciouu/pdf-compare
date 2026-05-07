@@ -41,8 +41,8 @@ class Settings(BaseSettings):
     llm_model: str = "gemma-4:31B"
     llm_max_tokens: int = 16384
     llm_temperature: float = 0.2
-    llm_analyze_dpi: int = 96  # 傳給 LLM 的縮圖解析度，越低 token 越少
-    llm_timeout_sec: int = 300  # 單次 LLM 請求逾時秒數
+    llm_analyze_dpi: int = 72  # 傳給 LLM 的縮圖解析度，越低 token 越少
+    llm_timeout_sec: int = 600  # 單次 LLM 請求逾時秒數
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="PDF_COMPARE_")
 

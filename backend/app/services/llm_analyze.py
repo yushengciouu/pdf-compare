@@ -73,20 +73,62 @@ def _png_to_base64(png_path: Path) -> str:
     return f"data:image/png;base64,{data}"
 
 
+# 章節號碼正則：匹配如 5.2.3、5.12.1.2、A.、(1) 等独立章節號
+# 使用負向前看 (negative lookbehind) 確保正前不是數字或句號，
+# 避免將 5.2.1 裡的 ".1" 誤切為新對法
+_SECTION_SPLIT_RE = re.compile(
+    r'(?<![.\d])(?=(?:\d+\.)+\d*\s)|(?<![A-Za-z])(?=[A-Z]\.\s)|(?=\(\d+\)\s)'
+)
+
+
+def _segment_page_text(text: str) -> list[str]:
+    """
+    將 PDF 頁面的扁平文字（一整行）切成段落列表，
+    讓 diff 能在段落級別而非整頁級別比對。
+    切分依據：章節號碼（如 5.2.3、A.、(1)）前插入換行。
+    """
+    if not text:
+        return []
+    parts = _SECTION_SPLIT_RE.split(text)
+    # 合併過短的片段（< 15 chars）到前一段，避免過度切碎
+    result: list[str] = []
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        if result and len(p) < 15:
+            result[-1] = result[-1] + " " + p
+        else:
+            result.append(p)
+    return result
+
+
 def _make_text_diff(before_text: str, after_text: str) -> str:
     """
     產生可讀的 unified diff 字串。
+    先將文字按章節號拆成段落（_segment_page_text），
+    再做段落級別的 unified diff，避免整頁一行無法看出差異。
     若兩份文字相同，回傳空字串。
     """
     if not before_text and not after_text:
         return ""
     if not before_text:
-        return f"+ {after_text[:1500]}"  # 全新頁，只顯示 after 文字（限長）
+        segs = _segment_page_text(after_text)
+        lines = [f"+ {s}" for s in segs[:40]]
+        return "\n".join(lines) or f"+ {after_text[:1500]}"
     if not after_text:
-        return f"- {before_text[:1500]}"  # 删除頁，只顯示 before 文字（限長）
+        segs = _segment_page_text(before_text)
+        lines = [f"- {s}" for s in segs[:40]]
+        return "\n".join(lines) or f"- {before_text[:1500]}"
 
-    before_lines = before_text.splitlines(keepends=True)
-    after_lines = after_text.splitlines(keepends=True)
+    before_lines = [s + "\n" for s in _segment_page_text(before_text)]
+    after_lines  = [s + "\n" for s in _segment_page_text(after_text)]
+
+    # 若切段結果為空（文字結構無法切分），退回原始 splitlines
+    if not before_lines:
+        before_lines = before_text.splitlines(keepends=True)
+    if not after_lines:
+        after_lines = after_text.splitlines(keepends=True)
 
     diff_lines = list(
         difflib.unified_diff(
@@ -95,7 +137,7 @@ def _make_text_diff(before_text: str, after_text: str) -> str:
             fromfile="before",
             tofile="after",
             lineterm="",
-            n=2,  # 上下文行數
+            n=1,  # 上下文行數
         )
     )
 
@@ -103,7 +145,7 @@ def _make_text_diff(before_text: str, after_text: str) -> str:
         return "(文字內容無差異)"
 
     # 限制總長度，避免 token 爆炸
-    MAX_CHARS = 2500
+    MAX_CHARS = 3500
     result = "\n".join(diff_lines)
     if len(result) > MAX_CHARS:
         result = result[:MAX_CHARS] + "\n...(文字差異過長，已截斷)"
@@ -152,8 +194,18 @@ def _build_page_message_content(
 
     content: list[dict] = [{"type": "text", "text": header}]
 
+    # 對於大幅偏移配對頁（offset >= 3）且文字差異小（text_diff < 0.25）的槽位，
+    # 跳過圖片（最大語素來源），只送文字 diff + 鄰頁文字。
+    # 注意: image_diff 對偏移頁不可靠（版頭頁碼改變會號跬），改用 text_diff 判斷。
+    offset_skip_images = (
+        state == "paired"
+        and before_page is not None and after_page is not None
+        and int(after_page) - int(before_page) >= 3
+        and text_diff < 0.25
+    )
+
     # --- 舊版（before）圖片 ---
-    if before_page is not None:
+    if not offset_skip_images and before_page is not None:
         before_png = before_render_dir / f"{int(before_page):04d}.png"
         if before_png.exists():
             content.append({"type": "text", "text": "【舊版頁面截圖】"})
@@ -165,7 +217,7 @@ def _build_page_message_content(
             )
 
     # --- 新版（after）圖片 ---
-    if after_page is not None:
+    if not offset_skip_images and after_page is not None:
         after_png = after_render_dir / f"{int(after_page):04d}.png"
         if after_png.exists():
             content.append({"type": "text", "text": "【新版頁面截圖】"})
@@ -184,21 +236,81 @@ def _build_page_message_content(
         content.append({"type": "text", "text": f"【文字層差異】\n{text_diff_str}"})
 
     # --- 配對頁大幅偏移：附加舊版鄰頁文字供跨頁比對 ---
-    # 若 after_page - before_page >= 3，代表中間可能有整批頁面位移，
-    # 提供 before:page+1 的文字讓 LLM 確認相似內容是否已存在於舊版鄰頁
+    # 若 after_page - before_page >= 3 且此槽位有名義上的差異（防止對很多 low-diff 頁浪費 token）
     if state == "paired" and before_page is not None and after_page is not None:
         offset = int(after_page) - int(before_page)
-        if offset >= 3:
-            next_before_idx = int(before_page)  # 0-based index = page+1 - 1 = page
-            if next_before_idx < len(before_texts):
-                neighbor_text = before_texts[next_before_idx][:1500].strip()
-                if neighbor_text:
+        if offset >= 3 and (image_diff >= 0.05 or text_diff >= 0.05):
+            from app.services.page_match import _strip_boilerplate
+            all_bt = before_texts + after_texts
+            common_skip = _detect_common_prefix_len(all_bt)
+
+            # 只提供鄰頁 +1 （防止訊息過大）
+            nb_idx = int(before_page)  # 0-based index = before_page+1 - 1
+            if nb_idx < len(before_texts):
+                raw_nb = before_texts[nb_idx]
+                stripped_nb = raw_nb[common_skip:].strip()[:1500]
+                if stripped_nb:
+                    # 偵測鄰頁與 after 頁的相似度
+                    from difflib import SequenceMatcher
+                    after_page_text = after_texts[int(after_page) - 1] if after_page else ""
+                    sim = SequenceMatcher(None, stripped_nb.lower(), after_page_text[common_skip:].lower()).ratio()
+
+                    reflow_hint = ""
+                    if sim >= 0.25:
+                        reflow_hint = (
+                            f"⚠️ 【頁面重排偵測警告】"
+                            f"舊版第 {int(before_page)+1} 頁與新版第 {after_page} 頁文字相似度 {sim:.2f}\n"
+                            f"→ diff 中 '+' 出現的章節內容，若已存在於下方舊版鄰頁文字，則為頁面重排，不得列為 added。\n"
+                        )
+                        content.insert(1, {"type": "text", "text": reflow_hint})
+
                     content.append({
                         "type": "text",
                         "text": (
-                            f"【舊版鄰頁文字（第 {int(before_page) + 1} 頁，供跨頁位移比對參考）】\n"
-                            f"{neighbor_text}"
+                            f"【舊版鄰頁文字（第 {int(before_page)+1} 頁，供跨頁位移比對參考）】\n"
+                            f"{stripped_nb}"
                         ),
+                    })
+
+    # --- inserted/deleted 頁：以文字相似度找最接近的對應頁，提供圖片供目視比對 ---
+    # 這讓 LLM 在只看到單側圖片時，仍能視覺確認內容是否已存在於另一版本
+    if state in ("inserted", "deleted"):
+        from app.services.page_match import _text_similarity
+
+        if state == "inserted" and after_page is not None:
+            # inserted：新版有，舊版無。搜尋舊版最相似頁
+            search_text = after_texts[int(after_page) - 1] if after_texts else ""
+            candidate_texts = before_texts
+            candidate_render_dir = before_render_dir
+            candidate_label = "舊版"
+        else:
+            # deleted：舊版有，新版無。搜尋新版最相似頁
+            search_text = before_texts[int(before_page) - 1] if before_texts else ""
+            candidate_texts = after_texts
+            candidate_render_dir = after_render_dir
+            candidate_label = "新版"
+
+        if search_text.strip() and candidate_texts:
+            best_idx, best_sim = None, 0.0
+            for ci, ct in enumerate(candidate_texts, 1):
+                sim = _text_similarity(search_text, ct)
+                if sim > best_sim:
+                    best_sim = sim
+                    best_idx = ci
+            # 只在相似度非常高時才附加圖片（避免誤導且控制訊息大小）
+            if best_idx is not None and best_sim >= 0.70:
+                cand_png = candidate_render_dir / f"{int(best_idx):04d}.png"
+                if cand_png.exists():
+                    content.append({
+                        "type": "text",
+                        "text": (
+                            f"【{candidate_label}最相似頁截圖（第 {best_idx} 頁，文字相似度 {best_sim:.2f}，供比對參考）】\n"
+                            f"⚠️ 若此圖與上方截圖內容相近，代表該頁可能是頁面位移而非真正新增/刪除。"
+                        ),
+                    })
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": _png_to_base64(cand_png)},
                     })
 
     return content
@@ -230,14 +342,31 @@ def _build_structure_context(candidates: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _detect_common_prefix_len(texts: list[str], max_check: int = 800) -> int:
+    """
+    計算所有非空頁面文字的共同前綴長度（最多檢查 max_check 個字元）。
+    用於跳過 PDF 中每頁都有的版權宣告等固定頁首/頁尾單行文字，
+    讓索引摘要從真正的頁面內容開始。
+    """
+    non_empty = [t for t in texts if t.strip()]
+    if len(non_empty) < 2:
+        return 0
+    probe = min(min(len(t) for t in non_empty), max_check)
+    for i in range(probe):
+        if len({t[i] for t in non_empty}) > 1:
+            return i
+    return probe
+
+
 def _build_full_text_index(
     before_texts: list[str],
     after_texts: list[str],
-    max_excerpt: int = 120,
+    max_excerpt: int = 200,
 ) -> str:
     """
-    產生舊版/新版所有頁面的文字摘要索引（移除樣板行後取前 max_excerpt 字元）。
-    當有 inserted/deleted 槽位時加入 prompt，
+    產生舊版/新版所有頁面的文字摘要索引。
+    先移除樣板行（_strip_boilerplate），再跳過所有頁共同的前綴字串
+    （如版權宣告整行），最後取 max_excerpt 字元作為該頁摘要。
     讓 LLM 能跨頁搜尋比對，避免把頁面位移誤判為新增或刪除。
     """
     from app.services.page_match import _strip_boilerplate
@@ -248,17 +377,20 @@ def _build_full_text_index(
     stripped_before = stripped[:len(before_texts)]
     stripped_after = stripped[len(before_texts):]
 
+    # 跳過所有頁共同的前綴（例如：整行版權宣告被 PDF 渲染為頁面文字首段）
+    skip = _detect_common_prefix_len(stripped)
+
     lines = [
         "【全文頁面摘要索引（請在判斷新增/刪除頁前先查閱此索引）】",
         "B###=舊版頁碼  A###=新版頁碼（已移除共同頁腳樣板）",
         "─ 舊版 ─",
     ]
     for i, text in enumerate(stripped_before, 1):
-        excerpt = text[:max_excerpt].replace("\n", " ").strip()
+        excerpt = text[skip:].strip()[:max_excerpt].replace("\n", " ").strip()
         lines.append(f"  B{i:03d}: {excerpt if excerpt else '（空白頁）'}")
     lines.append("─ 新版 ─")
     for i, text in enumerate(stripped_after, 1):
-        excerpt = text[:max_excerpt].replace("\n", " ").strip()
+        excerpt = text[skip:].strip()[:max_excerpt].replace("\n", " ").strip()
         lines.append(f"  A{i:03d}: {excerpt if excerpt else '（空白頁）'}")
     return "\n".join(lines)
 
@@ -301,14 +433,24 @@ def _build_prompt(
 《跨頁位移判斷規則（重要）》
 頁面配對演算法偶爾會因版面差異過大而將「位移的頁面」誤標為 inserted 或 deleted。
 此外，「配對頁（paired）」若新版頁碼遠大於舊版頁碼（如 before:13→after:24），
-代表中間有多頁被插入，該配對頁的內容可能來自舊版的「下一頁」而非真正新增。
+代表中間有多頁被插入，after 頁的內容可能包含原本屬於舊版「下一頁」的段落，
+而非真正的新增內容。
 
 在對任何「新增頁（inserted）」、「刪除頁（deleted）」或「配對頁中的 added/removed 變更」下結論前，請先執行以下步驟：
 1. 查閱 user 訊息開頭的「全文頁面摘要索引」（B###=舊版各頁摘要，A###=新版各頁摘要）
-2. 若有提供「舊版鄰頁文字（第 N+1 頁）」，務必比對其內容與 after 頁是否相似
-3. 對「新增頁」或「配對頁中的 added 內容」：搜尋其關鍵文字（章節號碼、段落首句）是否已出現在舊版索引（B###）中的某頁 → 若有，則該內容極可能是「頁面位移」而非真正的新增，summary 中應說明「內容源自舊版第 N 頁，可能為頁面位移」，importance 降為 low
-4. 對「刪除頁」或「配對頁中的 removed 內容」：搜尋其關鍵文字是否已出現在新版索引（A###）中的某頁 → 若有，則該內容極可能是「頁面位移」而非真正的刪除，summary 中應說明「內容仍存在於新版第 N 頁，可能為頁面位移」，importance 降為 low
-5. 只有在確認整份文件的另一版本中完全找不到相似內容時，才能判斷為真正的新增或刪除
+2. 若槽位頭部出現【頁面重排偵測警告】，務必優先執行下述步驟 3
+3. 【關鍵步驟】對 diff 中每一行以「+」開頭的段落（包含章節號碼如 5.2.5），逐一在【舊版鄰頁文字】中搜尋：
+   - 若該章節號碼或段落內容已出現在任何一個【舊版鄰頁文字（第 N 頁）】中 → 該段落是「頁面重排」，不是新增，**禁止**列為 added，改列為 modified（描述：頁面重排，內容源自舊版第 N 頁）或直接忽略
+   - 只有當該章節號碼、段落首句在所有【舊版鄰頁文字】中都找不到時，才能列為 added
+4. 對「新增頁」或「配對頁中的 added 內容」：搜尋其關鍵文字（章節號碼、段落首句）是否已出現在舊版索引（B###）中的某頁 → 若有，則該內容極可能是「頁面位移」而非真正的新增，summary 中應說明「內容源自舊版第 N 頁，可能為頁面位移」，importance 降為 low
+5. 對「刪除頁」或「配對頁中的 removed 內容」：搜尋其關鍵文字是否已出現在新版索引（A###）中的某頁 → 若有，則該內容極可能是「頁面位移」而非真正的刪除，summary 中應說明「內容仍存在於新版第 N 頁，可能為頁面位移」，importance 降為 low
+6. 只有在確認整份文件的另一版本中完全找不到相似內容時，才能判斷為真正的新增或刪除
+
+《頁面重排舉例》
+- diff 中 '+' 出現「5.2.5 Before the release...」，【舊版鄰頁文字（第 14 頁）】也有「5.2.5 Before the release...」
+  → 這是頁面重排，不能列為 added，應列為 modified（page reflow）或忽略
+- diff 中 '+' 出現「5.17 MTK Mass Production...」，在所有舊版鄰頁文字中都找不到 5.17
+  → 這才是真正新增，列為 added
 
 請嚴格依照以下 JSON 格式回傳，不要輸出任何格式說明文字，只輸出 JSON：
 
@@ -573,9 +715,49 @@ def build_analyze_report(
         before_texts = extract_page_texts(before_pdf)
         after_texts = extract_page_texts(after_pdf)
 
-        # Step 4：組裝 prompt
+        # Step 3.5：預分類「高可信度頁面重排」
+        # 對於偏移頁（offset >= 3），使用 text_diff 作為主要判斷基準（image_diff 會因版頭頁碼改變而號跬）：
+        # 條件1（純偏移）: text_diff < 0.05 → 內容幾乎相同，對循環 token 筆數，直接自動判定
+        # 條件2（帶鄰頁驗證）: 0.05 <= text_diff < 0.15 + 鄰頁相似度 >= 0.5
+        from difflib import SequenceMatcher as _SM
+        common_skip = _detect_common_prefix_len(before_texts + after_texts)
+
+        auto_reflow_results: list[dict] = []   # 自動回答的重排頁
+        llm_candidates: list[dict] = []        # 真正需要 LLM 分析的頁
+
+        for cand in candidates:
+            state = cand["state"]
+            bp = cand.get("before_page")
+            ap = cand.get("after_page")
+            text_diff_val = cand.get("text_diff", 0.0)
+
+            is_high_conf_reflow = False
+            if (
+                state == "paired"
+                and bp is not None and ap is not None
+                and int(ap) - int(bp) >= 3
+            ):
+                if text_diff_val < 0.05:
+                    # 文字內容幾乎相同，直接判定為純頁面偏移
+                    is_high_conf_reflow = True
+                elif text_diff_val < 0.15:
+                    # 中等文字差異，需要鄰頁相似度確認
+                    nb_idx = int(bp)  # 0-based = before_page + 1 - 1
+                    if nb_idx < len(before_texts):
+                        nb_stripped = before_texts[nb_idx][common_skip:].strip()
+                        af_stripped = after_texts[int(ap) - 1][common_skip:].strip()
+                        sim = _SM(None, nb_stripped[:1500].lower(), af_stripped[:1500].lower()).ratio()
+                        if sim >= 0.5:
+                            is_high_conf_reflow = True
+
+            if is_high_conf_reflow:
+                auto_reflow_results.append(cand)
+            else:
+                llm_candidates.append(cand)
+
+        # Step 4：組裝 prompt（只用需要 LLM 分析的候選頁）
         messages = _build_prompt(
-            candidates,
+            llm_candidates,
             before_render_dir,
             after_render_dir,
             before_texts,
@@ -583,35 +765,58 @@ def build_analyze_report(
         )
 
         # Step 5：呼叫 LLM（並 dump debug 資料）
-        _dump_llm_debug(messages)  # 送出前先存 messages
-        raw_response = _call_llm(messages, settings)
-        _dump_llm_debug(messages, raw_response)  # 收到回應後補存 response
+        if llm_candidates:
+            _dump_llm_debug(messages)  # 送出前先存 messages
+            raw_response = _call_llm(messages, settings)
+            _dump_llm_debug(messages, raw_response)  # 收到回應後補存 response
+            llm_result = _parse_llm_response(raw_response, llm_candidates)
+        else:
+            llm_result = {"overall_summary": "", "pages": []}
 
-        # Step 6：解析回應
-        llm_result = _parse_llm_response(raw_response, candidates)
+        # Step 6：解析回應已在上方完成
 
-        # Step 7：合併 prefilter 資訊與 LLM 分析結果
+        # Step 7：合併 prefilter 資訊與 LLM 分析結果（含自動分類的重排頁）
         slot_to_candidate = {int(c["slot"]): c for c in candidates}
         slot_to_llm = {int(p["slot"]): p for p in llm_result.get("pages", [])}
+        auto_reflow_slots = {int(c["slot"]) for c in auto_reflow_results}
 
         merged_pages = []
         for slot_no in sorted(slot_to_candidate.keys()):
             candidate = slot_to_candidate[slot_no]
-            llm_page = slot_to_llm.get(slot_no, {})
-            merged_pages.append(
-                {
-                    "slot": slot_no,
-                    "state": candidate["state"],
-                    "before_page": candidate.get("before_page"),
-                    "after_page": candidate.get("after_page"),
-                    "image_diff": candidate.get("image_diff", 0.0),
-                    "text_diff": candidate.get("text_diff", 0.0),
-                    "reason": candidate.get("reason", ""),
-                    "importance": llm_page.get("importance", "medium"),
-                    "summary": llm_page.get("summary", ""),
-                    "changes": llm_page.get("changes", []),
-                }
-            )
+            if slot_no in auto_reflow_slots:
+                # 自動分類為高可信度頁面重排，不需 LLM
+                merged_pages.append(
+                    {
+                        "slot": slot_no,
+                        "state": candidate["state"],
+                        "before_page": candidate.get("before_page"),
+                        "after_page": candidate.get("after_page"),
+                        "image_diff": candidate.get("image_diff", 0.0),
+                        "text_diff": candidate.get("text_diff", 0.0),
+                        "reason": candidate.get("reason", ""),
+                        "importance": "low",
+                        "summary": "頁面重排（版面調整導致頁面邊界位移，內容無實質變更）",
+                        "changes": [
+                            {"type": "modified", "description": f"頁碼從 {candidate.get('before_page')} 變更為 {candidate.get('after_page')}（頁面重排）"}
+                        ],
+                    }
+                )
+            else:
+                llm_page = slot_to_llm.get(slot_no, {})
+                merged_pages.append(
+                    {
+                        "slot": slot_no,
+                        "state": candidate["state"],
+                        "before_page": candidate.get("before_page"),
+                        "after_page": candidate.get("after_page"),
+                        "image_diff": candidate.get("image_diff", 0.0),
+                        "text_diff": candidate.get("text_diff", 0.0),
+                        "reason": candidate.get("reason", ""),
+                        "importance": llm_page.get("importance", "medium"),
+                        "summary": llm_page.get("summary", ""),
+                        "changes": llm_page.get("changes", []),
+                    }
+                )
 
         return {
             "summary": prefilter_report["summary"],
