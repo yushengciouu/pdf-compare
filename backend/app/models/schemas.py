@@ -108,8 +108,19 @@ class AnalyzeSummary(BaseModel):
     candidate_pages: int
 
 
+class AnalyzeSlotInfo(BaseModel):
+    slot: int
+    state: PageState
+    before_page: int | None = None
+    after_page: int | None = None
+    before_image: str | None = None
+    after_image: str | None = None
+
+
 class AnalyzeResponse(BaseModel):
     summary: AnalyzeSummary
     thresholds: dict
     overall_summary: str = ""
     pages: list[PageAnalysisResult] = Field(default_factory=list)
+    render_id: str | None = None
+    all_slots: list[AnalyzeSlotInfo] = Field(default_factory=list)

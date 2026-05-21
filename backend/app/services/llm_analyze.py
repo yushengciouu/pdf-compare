@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import mkdtemp
 from typing import Any
+from uuid import uuid4
 
 import httpx
 
@@ -659,6 +660,55 @@ def _parse_llm_response(raw: str, candidates: list[dict]) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _persist_renders(
+    settings: "Settings",
+    before_render_dir: Path,
+    after_render_dir: Path,
+    all_pages: list[dict],
+) -> tuple[str, list[dict]]:
+    """
+    將 before/after 已渲染的 PNG 複製到永久目錄，
+    回傳 (render_id, all_slots)。
+    render_id 格式：analyze-{uuid}，掛載在 jobs_root 下。
+    """
+    render_id = f"analyze-{uuid4()}"
+    persistent_root = settings.jobs_root / render_id / "render"
+    (persistent_root / "before").mkdir(parents=True, exist_ok=True)
+    (persistent_root / "after").mkdir(parents=True, exist_ok=True)
+
+    for src in before_render_dir.glob("*.png"):
+        shutil.copy2(src, persistent_root / "before" / src.name)
+    for src in after_render_dir.glob("*.png"):
+        shutil.copy2(src, persistent_root / "after" / src.name)
+
+    all_slots: list[dict] = []
+    for entry in sorted(all_pages, key=lambda x: int(x["slot"])):
+        bp = entry.get("before_page")
+        ap = entry.get("after_page")
+        before_image = (
+            f"/static/jobs/{render_id}/render/before/{int(bp):04d}.png"
+            if bp is not None
+            else None
+        )
+        after_image = (
+            f"/static/jobs/{render_id}/render/after/{int(ap):04d}.png"
+            if ap is not None
+            else None
+        )
+        all_slots.append(
+            {
+                "slot": int(entry["slot"]),
+                "state": entry["state"],
+                "before_page": bp,
+                "after_page": ap,
+                "before_image": before_image,
+                "after_image": after_image,
+            }
+        )
+
+    return render_id, all_slots
+
+
 def build_analyze_report(
     before_pdf: Path,
     after_pdf: Path,
@@ -714,13 +764,19 @@ def build_analyze_report(
             after_render_dir=after_render_dir,
         )
         candidates: list[dict] = prefilter_report["candidates"]
+        all_pages: list[dict] = prefilter_report.get("all_pages", [])
 
         if not candidates:
+            render_id, all_slots = _persist_renders(
+                settings, before_render_dir, after_render_dir, all_pages
+            )
             return {
                 "summary": prefilter_report["summary"],
                 "thresholds": prefilter_report["thresholds"],
                 "overall_summary": "未偵測到任何差異頁面",
                 "pages": [],
+                "render_id": render_id,
+                "all_slots": all_slots,
             }
 
         # Step 3：提取文字層
@@ -830,11 +886,17 @@ def build_analyze_report(
                     }
                 )
 
+        render_id, all_slots = _persist_renders(
+            settings, before_render_dir, after_render_dir, all_pages
+        )
+
         return {
             "summary": prefilter_report["summary"],
             "thresholds": prefilter_report["thresholds"],
             "overall_summary": llm_result.get("overall_summary", ""),
             "pages": merged_pages,
+            "render_id": render_id,
+            "all_slots": all_slots,
         }
 
     finally:

@@ -386,6 +386,56 @@
         border-left: 3px solid #fbbf24;
       }
 
+      /* LLM 分析後的 PDF 瀏覽器 */
+      .analyze-browser {
+        margin-top: 16px;
+        border-top: 1px solid #dce3ec;
+        padding-top: 14px;
+      }
+      .analyze-browser h3 {
+        margin: 0 0 10px;
+        font-size: 15px;
+        color: #2c1f4a;
+      }
+      .analyze-browser-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+      .analyze-browser-pane {
+        background: #f8fafc;
+        border: 1px solid #dce3ec;
+        border-radius: 10px;
+        height: 600px;
+        overflow-y: auto;
+        padding: 8px;
+      }
+      .analyze-browser-pane h4 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        color: #3f4d63;
+        position: sticky;
+        top: 0;
+        background: #f8fafc;
+        padding: 4px 0 6px;
+        border-bottom: 1px solid #e3e8f0;
+        z-index: 1;
+      }
+      .analyze-page-card {
+        border: 1px solid #d5ddeb;
+        background: #fff;
+        border-radius: 8px;
+        margin-bottom: 8px;
+        padding: 6px;
+      }
+      .analyze-page-head {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: #3f4d63;
+        margin-bottom: 4px;
+      }
+
       @media (max-width: 1200px) {
         .compare-layout {
           grid-template-columns: 1fr 1fr 240px;
@@ -469,6 +519,19 @@
           <div id="analyzeStatus" class="empty-note"></div>
           <div id="analyzeOverall" class="analyze-overall" style="display: none;"></div>
           <div id="analyzeList" class="analyze-list"></div>
+          <div id="analyzeBrowser" class="analyze-browser" style="display: none;">
+            <h3>頁面瀏覽（智能差頁）</h3>
+            <div class="analyze-browser-grid">
+              <div class="analyze-browser-pane" id="analyzeBrowserBefore">
+                <h4>Before</h4>
+                <div id="analyzeBrowserBeforePages"></div>
+              </div>
+              <div class="analyze-browser-pane" id="analyzeBrowserAfter">
+                <h4>After</h4>
+                <div id="analyzeBrowserAfterPages"></div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -518,6 +581,11 @@
       const analyzeStatusEl = document.getElementById("analyzeStatus");
       const analyzeOverallEl = document.getElementById("analyzeOverall");
       const analyzeListEl = document.getElementById("analyzeList");
+      const analyzeBrowserEl = document.getElementById("analyzeBrowser");
+      const analyzeBrowserBeforePagesEl = document.getElementById("analyzeBrowserBeforePages");
+      const analyzeBrowserAfterPagesEl = document.getElementById("analyzeBrowserAfterPages");
+      const analyzeBrowserBeforePane = document.getElementById("analyzeBrowserBefore");
+      const analyzeBrowserAfterPane = document.getElementById("analyzeBrowserAfter");
 
       let currentJobId = null;
       let syncingScroll = false;
@@ -652,7 +720,98 @@
         analyzeListEl.innerHTML = "";
         analyzeStatusEl.textContent = "";
         analyzeStatusEl.classList.remove("err");
+        analyzeBrowserEl.style.display = "none";
+        analyzeBrowserBeforePagesEl.innerHTML = "";
+        analyzeBrowserAfterPagesEl.innerHTML = "";
         updateProgress(0, 0, "等待開始");
+      }
+
+      let syncAnalyzeHeightTimer = null;
+
+      function scheduleAnalyzeSyncHeights() {
+        if (syncAnalyzeHeightTimer) clearTimeout(syncAnalyzeHeightTimer);
+        syncAnalyzeHeightTimer = setTimeout(syncAnalyzeBrowserHeights, 40);
+      }
+
+      function syncAnalyzeBrowserHeights() {
+        const beforeCards = analyzeBrowserBeforePagesEl.querySelectorAll(".analyze-page-card");
+        beforeCards.forEach((beforeCard) => {
+          const slot = beforeCard.id.replace("analyze-before-slot-", "");
+          const afterCard = document.getElementById(`analyze-after-slot-${slot}`);
+          if (!afterCard) return;
+          beforeCard.style.minHeight = "";
+          afterCard.style.minHeight = "";
+          const maxH = Math.max(beforeCard.offsetHeight, afterCard.offsetHeight);
+          beforeCard.style.minHeight = `${maxH}px`;
+          afterCard.style.minHeight = `${maxH}px`;
+        });
+      }
+
+      function renderAnalyzeBrowser(allSlots) {
+        analyzeBrowserBeforePagesEl.innerHTML = "";
+        analyzeBrowserAfterPagesEl.innerHTML = "";
+
+        const stateLabels = { paired: "配對頁", inserted: "新增頁", deleted: "刪除頁" };
+
+        for (const slot of allSlots) {
+          const stateText = stateLabels[slot.state] || slot.state;
+
+          // Before card
+          const beforeCard = document.createElement("div");
+          beforeCard.className = "analyze-page-card";
+          beforeCard.id = `analyze-before-slot-${slot.slot}`;
+          const beforeHead = document.createElement("div");
+          beforeHead.className = "analyze-page-head";
+          beforeHead.innerHTML = `<span>Slot ${slot.slot}</span><span>${stateText}${slot.before_page != null ? " · p." + slot.before_page : ""}</span>`;
+          beforeCard.appendChild(beforeHead);
+          if (slot.before_image) {
+            const img = document.createElement("img");
+            img.src = slot.before_image;
+            img.alt = `before slot ${slot.slot}`;
+            img.loading = "lazy";
+            img.decoding = "async";
+            img.style.cssText = "width:100%;border-radius:6px;display:block;";
+            img.addEventListener("load", scheduleAnalyzeSyncHeights, { once: true });
+            img.addEventListener("error", scheduleAnalyzeSyncHeights, { once: true });
+            beforeCard.appendChild(img);
+          } else {
+            const ph = document.createElement("div");
+            ph.className = "placeholder";
+            ph.textContent = "無對應頁面";
+            beforeCard.appendChild(ph);
+          }
+          analyzeBrowserBeforePagesEl.appendChild(beforeCard);
+
+          // After card
+          const afterCard = document.createElement("div");
+          afterCard.className = "analyze-page-card";
+          afterCard.id = `analyze-after-slot-${slot.slot}`;
+          const afterHead = document.createElement("div");
+          afterHead.className = "analyze-page-head";
+          afterHead.innerHTML = `<span>Slot ${slot.slot}</span><span>${stateText}${slot.after_page != null ? " · p." + slot.after_page : ""}</span>`;
+          afterCard.appendChild(afterHead);
+          if (slot.after_image) {
+            const img = document.createElement("img");
+            img.src = slot.after_image;
+            img.alt = `after slot ${slot.slot}`;
+            img.loading = "lazy";
+            img.decoding = "async";
+            img.style.cssText = "width:100%;border-radius:6px;display:block;";
+            img.addEventListener("load", scheduleAnalyzeSyncHeights, { once: true });
+            img.addEventListener("error", scheduleAnalyzeSyncHeights, { once: true });
+            afterCard.appendChild(img);
+          } else {
+            const ph = document.createElement("div");
+            ph.className = "placeholder";
+            ph.textContent = "無對應頁面";
+            afterCard.appendChild(ph);
+          }
+          analyzeBrowserAfterPagesEl.appendChild(afterCard);
+        }
+
+        analyzeBrowserEl.style.display = "block";
+        scheduleAnalyzeSyncHeights();
+        setTimeout(syncAnalyzeBrowserHeights, 300);
       }
 
       async function runAnalyze() {
@@ -702,6 +861,9 @@
             empty.className = "empty-note";
             empty.textContent = "未偵測到任何差異頁面";
             analyzeListEl.appendChild(empty);
+            if (data.all_slots && data.all_slots.length) {
+              renderAnalyzeBrowser(data.all_slots);
+            }
             return;
           }
 
@@ -734,6 +896,10 @@
             `;
             analyzeListEl.appendChild(item);
           });
+          // 渲染 PDF 瀏覽器
+          if (data.all_slots && data.all_slots.length) {
+            renderAnalyzeBrowser(data.all_slots);
+          }
         } catch (err) {
           analyzeStatusEl.textContent = `LLM 分析失敗：${err.message || err}`;
           analyzeStatusEl.classList.add("err");
@@ -1044,6 +1210,8 @@
 
       bindScrollSync(beforePane, afterPane);
       bindScrollSync(afterPane, beforePane);
+      bindScrollSync(analyzeBrowserBeforePane, analyzeBrowserAfterPane);
+      bindScrollSync(analyzeBrowserAfterPane, analyzeBrowserBeforePane);
 
       zoomRangeEl.addEventListener("input", () => {
         applyPageScale(zoomRangeEl.value);
@@ -1071,6 +1239,7 @@
         if (cachedPages.length) {
           scheduleSyncSlotHeights();
         }
+        scheduleAnalyzeSyncHeights();
       });
 
       applyPageScale(140);
