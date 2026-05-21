@@ -2,7 +2,7 @@ from app.core.config import get_settings
 from app.services.diff_fast import compare_images
 from app.services.diff_smart import plan_smart_mapping
 from app.services.render import extract_page_texts, get_page_count, render_pdf_pages
-from app.services.storage import cleanup_expired_jobs, load_meta, save_meta, write_json
+from app.services.storage import cleanup_expired_jobs, cleanup_llm_debug, load_meta, save_meta, write_json
 from app.workers.celery_app import celery_app
 
 
@@ -161,3 +161,9 @@ def run_compare_job(job_id: str, mode: str) -> None:
 def cleanup_expired_jobs_task() -> dict:
     settings = get_settings()
     return cleanup_expired_jobs(settings)
+
+
+@celery_app.task(name="app.workers.tasks.cleanup_llm_debug_task")
+def cleanup_llm_debug_task() -> dict:
+    settings = get_settings()
+    return cleanup_llm_debug(settings)

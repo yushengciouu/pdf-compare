@@ -111,6 +111,31 @@ def delete_job_root(job_root: Path) -> None:
         shutil.rmtree(job_root)
 
 
+def cleanup_llm_debug(settings: Settings, retain_days: int = 7) -> dict:
+    """刪除 backend/tmp/llm_debug/ 中超過 retain_days 天的資料夾。"""
+    debug_root = Path(__file__).parent.parent.parent / "tmp" / "llm_debug"
+    if not debug_root.exists():
+        return {"scanned": 0, "deleted": 0, "failed": 0}
+
+    cutoff = utc_now() - timedelta(days=retain_days)
+    scanned = deleted = failed = 0
+
+    for entry in debug_root.iterdir():
+        if not entry.is_dir():
+            continue
+        scanned += 1
+        try:
+            # 資料夾名稱格式：YYYYMMDD_HHMMSS
+            ts = datetime.strptime(entry.name, "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
+            if ts <= cutoff:
+                shutil.rmtree(entry)
+                deleted += 1
+        except (ValueError, OSError):
+            failed += 1
+
+    return {"scanned": scanned, "deleted": deleted, "failed": failed}
+
+
 def cleanup_expired_jobs(settings: Settings) -> dict:
     now = utc_now()
     scanned = 0

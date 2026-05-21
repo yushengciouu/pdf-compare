@@ -25,7 +25,11 @@ celery_app.conf.update(
         "cleanup-expired-jobs-hourly": {
             "task": "app.workers.tasks.cleanup_expired_jobs_task",
             "schedule": crontab(minute="0"),
-        }
+        },
+        "cleanup-llm-debug-daily": {
+            "task": "app.workers.tasks.cleanup_llm_debug_task",
+            "schedule": crontab(hour="3", minute="0"),
+        },
     },
 )
 
