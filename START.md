@@ -62,7 +62,24 @@ celery -A app.workers.celery_app.celery_app beat --loglevel=info
 
 ## 方式 B：Docker Compose 一鍵啟動
 
-在專案根目錄執行：
+### 1) 準備環境變數（可選）
+
+複製範本並依需求修改（尤其是 LLM 設定）：
+
+```powershell
+Copy-Item backend\.env.example backend\.env
+```
+
+> Docker 部署時，路徑相關設定（`STORAGE_ROOT`、`FRONTEND_DIR`、Redis 連線）會由 `docker-compose.yml` 自動覆蓋，無需手動修改。
+
+若要更換 LLM 伺服器，可在 `.env` 修改，或直接帶入環境變數：
+
+```powershell
+$env:PDF_COMPARE_LLM_BASE_URL = "http://your-llm-host:8001"
+docker compose up -d --build
+```
+
+### 2) 建置並啟動
 
 ```powershell
 cd "C:\Users\felix_chiu\Desktop\project\pdf-compare"
@@ -77,10 +94,10 @@ docker compose up -d --build
 
 會同時啟動：
 
-- Redis
-- API
-- Celery Worker
-- Celery Beat
+- Redis（含 health check）
+- API（等 Redis 健康後啟動，2 workers）
+- Celery Worker（並行度 2）
+- Celery Beat（排程清理）
 
 ### 關閉 Docker Compose
 
@@ -90,7 +107,7 @@ docker compose up -d --build
 docker compose down
 ```
 
-- `docker compose down`：停止所有容器並刪除（完全清理）
+- `docker compose down`：停止所有容器並刪除
 - `docker compose stop`：只停止容器，保留資料
 
 ### 下次啟動
@@ -102,6 +119,19 @@ docker compose up
 
 - 若沒改動程式碼，直接 `docker compose up` 即可
 - 若有改動程式碼且想重建，執行 `docker compose up --build`
+
+### 查看服務狀態與日誌
+
+```powershell
+# 查看所有服務狀態
+docker compose ps
+
+# 查看即時日誌
+docker compose logs -f
+
+# 只看特定服務
+docker compose logs -f worker
+```
 
 ## 啟動後如何使用
 

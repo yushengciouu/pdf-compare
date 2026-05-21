@@ -17,7 +17,7 @@
 
 儲存位置：
 
-- `C:\Users\felix_chiu\Desktop\project\var\compare\jobs\<job_id>\...`
+- `/path/to/pdf-compare/var/compare/jobs/<job_id>/...`
 
 ## 2) 建議技術棧
 

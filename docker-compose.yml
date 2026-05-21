@@ -1,53 +1,67 @@
-version: "3.9"
+# 共用後端設定（YAML anchor）
+x-backend: &backend-common
+  build:
+    context: ./backend
+  env_file:
+    - path: ./backend/.env
+      required: false
+  environment:
+    PDF_COMPARE_STORAGE_ROOT: /var/compare
+    PDF_COMPARE_REDIS_URL: redis://redis:6379/0
+    PDF_COMPARE_CELERY_BROKER_URL: redis://redis:6379/0
+    PDF_COMPARE_CELERY_RESULT_BACKEND: redis://redis:6379/1
+  volumes:
+    - ./var:/var
+  depends_on:
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
 
 services:
   redis:
-    image: redis:7
+    image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
   api:
-    build:
-      context: ./backend
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    <<: *backend-common
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
     ports:
       - "8000:8000"
     volumes:
-      - ./backend/app:/app/app
-      - ./frontend:/frontend
       - ./var:/var
+      - ./frontend:/frontend
     environment:
-      PDF_COMPARE_FRONTEND_DIR: /frontend
       PDF_COMPARE_STORAGE_ROOT: /var/compare
+      PDF_COMPARE_REDIS_URL: redis://redis:6379/0
       PDF_COMPARE_CELERY_BROKER_URL: redis://redis:6379/0
       PDF_COMPARE_CELERY_RESULT_BACKEND: redis://redis:6379/1
-    depends_on:
-      - redis
+      PDF_COMPARE_FRONTEND_DIR: /frontend
+      PDF_COMPARE_LLM_BASE_URL: ${PDF_COMPARE_LLM_BASE_URL:-http://192.168.39.143:8001}
+      PDF_COMPARE_LLM_MODEL: ${PDF_COMPARE_LLM_MODEL:-gemma-4:31B}
 
   worker:
-    build:
-      context: ./backend
-    command: celery -A app.workers.celery_app.celery_app worker --loglevel=info
-    volumes:
-      - ./backend/app:/app/app
-      - ./var:/var
+    <<: *backend-common
+    command: celery -A app.workers.celery_app.celery_app worker --loglevel=info --concurrency=2
     environment:
       PDF_COMPARE_STORAGE_ROOT: /var/compare
+      PDF_COMPARE_REDIS_URL: redis://redis:6379/0
       PDF_COMPARE_CELERY_BROKER_URL: redis://redis:6379/0
       PDF_COMPARE_CELERY_RESULT_BACKEND: redis://redis:6379/1
-    depends_on:
-      - redis
+      PDF_COMPARE_LLM_BASE_URL: ${PDF_COMPARE_LLM_BASE_URL:-http://192.168.39.143:8001}
+      PDF_COMPARE_LLM_MODEL: ${PDF_COMPARE_LLM_MODEL:-gemma-4:31B}
 
   beat:
-    build:
-      context: ./backend
-    command: celery -A app.workers.celery_app.celery_app beat --loglevel=info
-    volumes:
-      - ./backend/app:/app/app
-      - ./var:/var
+    <<: *backend-common
+    command: celery -A app.workers.celery_app.celery_app beat --loglevel=info --schedule=/var/compare/celerybeat-schedule
     environment:
       PDF_COMPARE_STORAGE_ROOT: /var/compare
+      PDF_COMPARE_REDIS_URL: redis://redis:6379/0
       PDF_COMPARE_CELERY_BROKER_URL: redis://redis:6379/0
       PDF_COMPARE_CELERY_RESULT_BACKEND: redis://redis:6379/1
-    depends_on:
-      - redis

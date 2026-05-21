@@ -10,6 +10,9 @@ backend/runlogs/
 backend/celerybeat-schedule*
 backend/tmp/
 
+# Docs (internal)
+docs/
+
 # OS
 .DS_Store
 Thumbs.db
