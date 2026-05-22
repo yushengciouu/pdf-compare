@@ -256,6 +256,26 @@
         font-size: 13px;
         line-height: 1.5;
       }
+      /* LLM 分析 spinner */
+      .analyze-running {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 14px;
+        color: #5a2d91;
+      }
+      .spinner {
+        width: 18px;
+        height: 18px;
+        border: 3px solid #d8c8f0;
+        border-top-color: #5a2d91;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+        flex-shrink: 0;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
       /* LLM 分析結果 */
       .btn-analyze {
         background: #5a2d91;
@@ -465,7 +485,13 @@
         </div>
         <div class="status">任務 ID：<span id="job" class="mono">-</span></div>
         <div id="analyzeSection" style="margin-top: 10px; display: none;">
-          <div id="analyzeStatus" class="empty-note"></div>
+          <div id="analyzeStatus" class="empty-note">
+            <div id="analyzeSpinnerRow" style="display:none" class="analyze-running">
+              <div class="spinner"></div>
+              <span id="analyzeTimerText">LLM 分析中，請稍候...</span>
+            </div>
+            <span id="analyzeStatusText"></span>
+          </div>
           <div id="analyzeOverall" class="analyze-overall" style="display: none;"></div>
           <div id="analyzeList" class="analyze-list"></div>
           <div id="analyzeBrowser" class="analyze-browser" style="display: none;">
@@ -517,6 +543,9 @@
       const analyzeBtn = document.getElementById("analyzeBtn");
       const analyzeSectionEl = document.getElementById("analyzeSection");
       const analyzeStatusEl = document.getElementById("analyzeStatus");
+      const analyzeSpinnerRowEl = document.getElementById("analyzeSpinnerRow");
+      const analyzeTimerTextEl = document.getElementById("analyzeTimerText");
+      const analyzeStatusTextEl = document.getElementById("analyzeStatusText");
       const analyzeOverallEl = document.getElementById("analyzeOverall");
       const analyzeListEl = document.getElementById("analyzeList");
       const analyzeBrowserEl = document.getElementById("analyzeBrowser");
@@ -525,6 +554,7 @@
       const analyzeBrowserBeforePane = document.getElementById("analyzeBrowserBefore");
       const analyzeBrowserAfterPane = document.getElementById("analyzeBrowserAfter");
 
+      let analyzeTimerInterval = null;
       let currentJobId = null;
       let syncingScroll = false;
       let cachedPages = [];
@@ -630,8 +660,9 @@
         analyzeSectionEl.style.display = "none";
         analyzeOverallEl.style.display = "none";
         analyzeListEl.innerHTML = "";
-        analyzeStatusEl.textContent = "";
-        analyzeStatusEl.classList.remove("err");
+        analyzeSpinnerRowEl.style.display = "none";
+        analyzeStatusTextEl.textContent = "";
+        analyzeStatusTextEl.className = "";
         analyzeBrowserEl.style.display = "none";
         analyzeBrowserBeforePagesEl.innerHTML = "";
         analyzeBrowserAfterPagesEl.innerHTML = "";
@@ -726,6 +757,30 @@
         setTimeout(syncAnalyzeBrowserHeights, 300);
       }
 
+      function startAnalyzeTimer() {
+        const startTime = Date.now();
+        analyzeSpinnerRowEl.style.display = "flex";
+        analyzeStatusTextEl.textContent = "";
+        analyzeTimerTextEl.textContent = "LLM 分析中，請稍候... 0 秒";
+        analyzeTimerInterval = setInterval(() => {
+          const elapsed = Math.floor((Date.now() - startTime) / 1000);
+          const m = Math.floor(elapsed / 60);
+          const s = elapsed % 60;
+          const timeStr = m > 0 ? `${m} 分 ${s} 秒` : `${s} 秒`;
+          analyzeTimerTextEl.textContent = `LLM 分析中，請稍候... ${timeStr}`;
+        }, 1000);
+      }
+
+      function stopAnalyzeTimer(resultText, isError = false) {
+        if (analyzeTimerInterval) {
+          clearInterval(analyzeTimerInterval);
+          analyzeTimerInterval = null;
+        }
+        analyzeSpinnerRowEl.style.display = "none";
+        analyzeStatusTextEl.textContent = resultText;
+        analyzeStatusTextEl.className = isError ? "err" : "";
+      }
+
       async function runAnalyze() {
         const before = beforeInput.files?.[0];
         const after = afterInput.files?.[0];
@@ -738,7 +793,7 @@
         analyzeSectionEl.style.display = "block";
         analyzeOverallEl.style.display = "none";
         analyzeListEl.innerHTML = "";
-        analyzeStatusEl.textContent = "LLM 分析中，請稍候（依文件大小可能需要數分鐘）...";
+        startAnalyzeTimer();
 
         try {
           const form = new FormData();
@@ -758,8 +813,9 @@
 
           const pages = data.pages || [];
           const summary = data.summary || {};
-          analyzeStatusEl.textContent =
-            `LLM 分析完成：共分析 ${pages.length} 個差異頁面（候選 ${summary.candidate_pages || 0} / ${summary.total_slots || 0} 頁）`;
+          stopAnalyzeTimer(
+            `LLM 分析完成：共分析 ${pages.length} 個差異頁面（候選 ${summary.candidate_pages || 0} / ${summary.total_slots || 0} 頁）`
+          );
 
           // 整體摘要
           if (data.overall_summary) {
@@ -813,8 +869,7 @@
             renderAnalyzeBrowser(data.all_slots);
           }
         } catch (err) {
-          analyzeStatusEl.textContent = `LLM 分析失敗：${err.message || err}`;
-          analyzeStatusEl.classList.add("err");
+          stopAnalyzeTimer(`LLM 分析失敗：${err.message || err}`, true);
         } finally {
           analyzeBtn.disabled = false;
         }
