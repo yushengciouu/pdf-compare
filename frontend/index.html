@@ -115,9 +115,6 @@
         opacity: 0.6;
         cursor: not-allowed;
       }
-      .btn-secondary {
-        background: #1f7a4d;
-      }
       .status {
         margin-top: 12px;
         font-size: 14px;
@@ -153,18 +150,9 @@
 
       .compare-layout {
         display: grid;
-        grid-template-columns: 1fr 1fr 300px;
+        grid-template-columns: 1fr 1fr;
         gap: 12px;
         align-items: start;
-      }
-      body.zoom-large .compare-layout {
-        grid-template-columns: 1fr 1fr 240px;
-      }
-      body.zoom-xlarge .compare-layout {
-        grid-template-columns: 1fr 1fr;
-      }
-      body.zoom-xlarge .diff-panel {
-        display: none;
       }
       .pane {
         background: #f8fafc;
@@ -174,8 +162,7 @@
         overflow: auto;
         padding: 10px;
       }
-      .pane h3,
-      .diff-panel h3 {
+      .pane h3 {
         margin: 0 0 8px;
         font-size: 15px;
       }
@@ -264,32 +251,6 @@
         font-size: 13px;
       }
 
-      .diff-panel {
-        background: #fff;
-        border: 1px solid #dce3ec;
-        border-radius: 12px;
-        height: calc(100vh - 220px);
-        overflow: auto;
-        padding: 10px;
-      }
-      .diff-list {
-        display: grid;
-        gap: 8px;
-      }
-      .diff-item {
-        width: 100%;
-        text-align: left;
-        border: 1px solid #d8e0eb;
-        background: #f7f9fc;
-        color: #1b2738;
-        border-radius: 8px;
-        padding: 8px;
-        font-size: 13px;
-      }
-      .diff-item:hover {
-        border-color: #86b3e6;
-        background: #eef5ff;
-      }
       .empty-note {
         color: var(--muted);
         font-size: 13px;
@@ -438,15 +399,14 @@
 
       @media (max-width: 1200px) {
         .compare-layout {
-          grid-template-columns: 1fr 1fr 240px;
+          grid-template-columns: 1fr 1fr;
         }
       }
       @media (max-width: 980px) {
         .compare-layout {
           grid-template-columns: 1fr;
         }
-        .pane,
-        .diff-panel {
+        .pane {
           height: 55vh;
         }
       }
@@ -492,9 +452,6 @@
           <div id="progressText" class="progress-text">0%</div>
         </div>
         <div class="view-controls">
-          <label for="zoomRange" style="display:none">預覽大小</label>
-          <input id="zoomRange" type="range" min="100" max="140" step="10" value="140" style="display:none" />
-          <span id="zoomText" class="mono" style="display:none">超大</span>
           <label for="maskOpacity" class="mono">遮罩</label>
           <input id="maskOpacity" class="mini-range" type="range" min="25" max="85" step="5" value="56" />
           <span id="maskOpacityText" class="mono">56%</span>
@@ -504,14 +461,6 @@
             <option value="removed">只看左有右無</option>
             <option value="added">只看右有左無</option>
           </select>
-          <label class="toggle" for="onlyDiffPages">
-            <input id="onlyDiffPages" type="checkbox" />
-            只看有差異頁
-          </label>
-          <label class="toggle" for="hideSmallDiff">
-            <input id="hideSmallDiff" type="checkbox" />
-            隱藏相差小
-          </label>
 
         </div>
         <div class="status">任務 ID：<span id="job" class="mono">-</span></div>
@@ -520,7 +469,7 @@
           <div id="analyzeOverall" class="analyze-overall" style="display: none;"></div>
           <div id="analyzeList" class="analyze-list"></div>
           <div id="analyzeBrowser" class="analyze-browser" style="display: none;">
-            <h3>頁面瀏覽（智能差頁）</h3>
+            <h3>前後版本對照</h3>
             <div class="analyze-browser-grid">
               <div class="analyze-browser-pane" id="analyzeBrowserBefore">
                 <h4>Before</h4>
@@ -546,11 +495,6 @@
           <div id="afterPages" class="pages"></div>
         </section>
 
-        <aside class="diff-panel" style="display:none">
-          <h3>差異清單</h3>
-          <div id="summary" class="empty-note">尚未產生比對結果</div>
-          <div id="diffList" class="diff-list" style="margin-top: 8px"></div>
-        </aside>
       </section>
     </main>
 
@@ -563,17 +507,11 @@
       const jobEl = document.getElementById("job");
       const beforePagesEl = document.getElementById("beforePages");
       const afterPagesEl = document.getElementById("afterPages");
-      const diffListEl = document.getElementById("diffList");
-      const summaryEl = document.getElementById("summary");
       const progressFillEl = document.getElementById("progressFill");
       const progressTextEl = document.getElementById("progressText");
-      const zoomRangeEl = document.getElementById("zoomRange");
-      const zoomTextEl = document.getElementById("zoomText");
       const maskOpacityEl = document.getElementById("maskOpacity");
       const maskOpacityTextEl = document.getElementById("maskOpacityText");
       const markModeEl = document.getElementById("markMode");
-      const onlyDiffPagesEl = document.getElementById("onlyDiffPages");
-      const hideSmallDiffEl = document.getElementById("hideSmallDiff");
       const beforePane = document.getElementById("beforePane");
       const afterPane = document.getElementById("afterPane");
       const analyzeBtn = document.getElementById("analyzeBtn");
@@ -679,30 +617,6 @@
         setTimeout(() => card.classList.remove("focused"), 1400);
       }
 
-      function applyPageScale(percent) {
-        const value = Number(percent);
-        beforePagesEl.style.zoom = "1";
-        afterPagesEl.style.zoom = "1";
-        document.body.classList.remove("zoom-large", "zoom-xlarge");
-
-        if (value >= 130) {
-          document.body.classList.add("zoom-xlarge");
-          zoomTextEl.textContent = "超大";
-          scheduleSyncSlotHeights();
-          setTimeout(scheduleSyncSlotHeights, 120);
-          return;
-        }
-        if (value >= 110) {
-          document.body.classList.add("zoom-large");
-          zoomTextEl.textContent = "加大";
-          scheduleSyncSlotHeights();
-          setTimeout(scheduleSyncSlotHeights, 120);
-          return;
-        }
-        zoomTextEl.textContent = "標準";
-        scheduleSyncSlotHeights();
-        setTimeout(scheduleSyncSlotHeights, 120);
-      }
 
       function setStatus(text, isError = false) {
         statusEl.textContent = text;
@@ -712,9 +626,7 @@
       function clearResultView() {
         beforePagesEl.innerHTML = "";
         afterPagesEl.innerHTML = "";
-        diffListEl.innerHTML = "";
         cachedPages = [];
-        summaryEl.textContent = "尚未產生比對結果";
         analyzeSectionEl.style.display = "none";
         analyzeOverallEl.style.display = "none";
         analyzeListEl.innerHTML = "";
@@ -826,7 +738,7 @@
         analyzeSectionEl.style.display = "block";
         analyzeOverallEl.style.display = "none";
         analyzeListEl.innerHTML = "";
-        analyzeStatusEl.textContent = "LLM 分析中，請稍候（依文件大小可能需要數十秒）...";
+        analyzeStatusEl.textContent = "LLM 分析中，請稍候（依文件大小可能需要數分鐘）...";
 
         try {
           const form = new FormData();
@@ -1086,117 +998,19 @@
         return card;
       }
 
-      function renderDiffList(pages) {
-        diffListEl.innerHTML = "";
-        const pageItems = buildPageItems(pages);
-        const hideSmall = !!hideSmallDiffEl.checked;
-        const visibleItems = hideSmall
-          ? pageItems.filter((item) => item.label !== "相差小")
-          : pageItems;
-
-        if (!visibleItems.length) {
-          summaryEl.textContent = "沒有偵測到差異框";
-          return;
-        }
-
-        summaryEl.textContent = `共 ${visibleItems.length} 頁有差異，點擊可跳頁`;
-
-        for (const item of visibleItems) {
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.className = "diff-item";
-          btn.textContent = `第 ${item.pageNo} 頁（${item.label}）`;
-          btn.addEventListener("click", () => focusDiff(item.pageNo));
-          diffListEl.appendChild(btn);
-        }
-      }
-
-      function scoreLabel(score) {
-        if (score >= 0.72) return "相差極大";
-        if (score >= 0.5) return "相差大";
-        if (score >= 0.2) return "相差中等";
-        return "相差小";
-      }
-
-      function buildPageItems(pages) {
-        const pageItems = [];
-        for (const page of pages) {
-          const boxes = page.boxes || [];
-          const state = page.mapping?.state;
-          if (!boxes.length && state === "paired") continue;
-
-          if (state === "inserted") {
-            pageItems.push({ pageNo: page.page_no, diffCount: 0, label: "新增頁" });
-            continue;
-          }
-
-          if (state === "deleted") {
-            pageItems.push({ pageNo: page.page_no, diffCount: 0, label: "刪除頁" });
-            continue;
-          }
-
-          let maxScore = 0;
-          let totalArea = 0;
-          for (let i = 0; i < boxes.length; i += 1) {
-            maxScore = Math.max(maxScore, Number(boxes[i].score || 0));
-            totalArea += Number((boxes[i].w || 0) * (boxes[i].h || 0));
-          }
-
-          const pageWidth = Number(page.width || 0);
-          const pageHeight = Number(page.height || 0);
-          const pageArea = pageWidth > 0 && pageHeight > 0 ? pageWidth * pageHeight : 0;
-          const areaRatio = pageArea > 0 ? totalArea / pageArea : 0;
-
-          const maxScoreNorm = Math.max(0, Math.min(1, maxScore));
-          const areaScoreNorm = Math.max(0, Math.min(1, Math.sqrt(areaRatio) * 8));
-          const countScoreNorm = Math.max(0, Math.min(1, boxes.length / 120));
-          const pageSeverity = maxScoreNorm * 0.5 + areaScoreNorm * 0.35 + countScoreNorm * 0.15;
-
-          pageItems.push({
-            pageNo: page.page_no,
-            diffCount: boxes.length,
-            label: scoreLabel(pageSeverity),
-          });
-        }
-        return pageItems;
-      }
-
-      function focusDiff(pageNo) {
-        const beforeCard = document.getElementById(`before-slot-${pageNo}`);
-        const afterCard = document.getElementById(`after-slot-${pageNo}`);
-        scrollCardIntoPane(beforePane, beforeCard);
-        scrollCardIntoPane(afterPane, afterCard);
-        flashCard(afterCard);
-        setStatus(`已跳至第 ${pageNo} 頁差異`);
-      }
-
       function renderPages(jobId, pages) {
         beforePagesEl.innerHTML = "";
         afterPagesEl.innerHTML = "";
 
-        const pageItems = buildPageItems(pages);
-        const itemMap = new Map(pageItems.map((x) => [x.pageNo, x]));
-        const onlyDiff = !!onlyDiffPagesEl.checked;
-        const hideSmall = !!hideSmallDiffEl.checked;
-        let viewPages = onlyDiff ? pages.filter((p) => itemMap.has(p.page_no)) : pages;
-        if (hideSmall) {
-          viewPages = viewPages.filter((p) => {
-            const item = itemMap.get(p.page_no);
-            if (!item) return true;
-            return item.label !== "相差小";
-          });
-        }
-
-        for (const page of viewPages) {
+        for (const page of pages) {
           beforePagesEl.appendChild(createBeforePageCard(page));
           afterPagesEl.appendChild(createAfterPageCard(page));
         }
 
-        renderDiffList(pages);
         applyMaskOpacity(maskOpacityEl.value);
         bindImageLoadHeightSync();
         scheduleSyncSlotHeights();
-        setStatus(`比對完成：顯示 ${viewPages.length} / ${pages.length} 頁`);
+        setStatus(`比對完成：顯示 ${pages.length} 頁`);
       }
 
       function bindScrollSync(a, b) {
@@ -1213,23 +1027,9 @@
       bindScrollSync(analyzeBrowserBeforePane, analyzeBrowserAfterPane);
       bindScrollSync(analyzeBrowserAfterPane, analyzeBrowserBeforePane);
 
-      zoomRangeEl.addEventListener("input", () => {
-        applyPageScale(zoomRangeEl.value);
-      });
-
       maskOpacityEl.addEventListener("input", () => applyMaskOpacity(maskOpacityEl.value));
       markModeEl.addEventListener("change", () => {
         applyMarkMode(markModeEl.value);
-        if (cachedPages.length) {
-          renderPages(currentJobId, cachedPages);
-        }
-      });
-      onlyDiffPagesEl.addEventListener("change", () => {
-        if (cachedPages.length) {
-          renderPages(currentJobId, cachedPages);
-        }
-      });
-      hideSmallDiffEl.addEventListener("change", () => {
         if (cachedPages.length) {
           renderPages(currentJobId, cachedPages);
         }
@@ -1242,7 +1042,6 @@
         scheduleAnalyzeSyncHeights();
       });
 
-      applyPageScale(140);
       applyMarkMode(markModeEl.value);
       submitBtn.addEventListener("click", uploadAndStart);
       analyzeBtn.addEventListener("click", runAnalyze);
