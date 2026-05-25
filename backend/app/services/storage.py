@@ -112,8 +112,8 @@ def delete_job_root(job_root: Path) -> None:
 
 
 def cleanup_llm_debug(settings: Settings, retain_days: int = 7) -> dict:
-    """刪除 backend/tmp/llm_debug/ 中超過 retain_days 天的資料夾。"""
-    debug_root = Path(__file__).parent.parent.parent / "tmp" / "llm_debug"
+    """刪除 <storage_root>/llm_debug/ 中超過 retain_days 天的資料夾。"""
+    debug_root = settings.storage_root / "llm_debug"
     if not debug_root.exists():
         return {"scanned": 0, "deleted": 0, "failed": 0}
 

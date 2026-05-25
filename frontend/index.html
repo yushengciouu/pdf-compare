@@ -366,6 +366,8 @@
         color: #78350f;
         border-left: 3px solid #fbbf24;
       }
+      .analyze-changes li.filtered-hidden { display: none; }
+      .analyze-item.all-changes-hidden { display: none; }
 
       /* LLM 分析後的 PDF 瀏覽器 */
       .analyze-browser {
@@ -485,6 +487,12 @@
         </div>
         <div class="status">任務 ID：<span id="job" class="mono">-</span></div>
         <div id="analyzeSection" style="margin-top: 10px; display: none;">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+            <button id="hideReorderBtn" type="button" style="background:#475569;min-width:0;width:auto;padding:6px 14px;font-size:13px;" onclick="toggleHideReorder()">隱藏頁面重排</button>
+            <span id="hideReorderHint" style="font-size:12px;color:#637083;"></span>
+            <button id="hideVersionBtn" type="button" style="background:#475569;min-width:0;width:auto;padding:6px 14px;font-size:13px;" onclick="toggleHideVersion()">隱藏版本號變更</button>
+            <span id="hideVersionHint" style="font-size:12px;color:#637083;"></span>
+          </div>
           <div id="analyzeStatus" class="empty-note">
             <div id="analyzeSpinnerRow" style="display:none" class="analyze-running">
               <div class="spinner"></div>
@@ -857,13 +865,17 @@
               </div>
               <div class="analyze-summary-text">${p.summary || "（無摘要）"}</div>
               <ul class="analyze-changes">
-                ${(p.changes || []).map((c) =>
-                  `<li class="${c.type}">[${c.type}] ${c.description}</li>`
-                ).join("")}
+                ${(p.changes || []).map((c) => {
+                  const fr = isReorderChangeItem(c) ? "1" : "0";
+                  const fv = isVersionChangeItem(c) ? "1" : "0";
+                  return `<li class="${c.type}" data-fr="${fr}" data-fv="${fv}">[${c.type}] ${c.description}</li>`;
+                }).join("")}
               </ul>
             `;
             analyzeListEl.appendChild(item);
           });
+          applyHideReorder();
+          applyHideVersion();
           // 渲染 PDF 瀏覽器
           if (data.all_slots && data.all_slots.length) {
             renderAnalyzeBrowser(data.all_slots);
@@ -1096,6 +1108,85 @@
         }
         scheduleAnalyzeSyncHeights();
       });
+
+      let hideReorderActive = false;
+      let hideVersionActive = false;
+
+      // 判斷單一 change 項目是否為頁面重排類
+      function isReorderChangeItem(c) {
+        const desc = c.description || "";
+        return desc.includes("頁碼從") || desc.includes("頁面重排") || desc.includes("頁碼遞移") ||
+               desc.includes("頁碼偏移") || desc.includes("版面調整") || desc.includes("頁碼同步更新") ||
+               desc.includes("內容無實質變更");
+      }
+
+      // 判斷單一 change 項目是否為版本號/日期變更類（只抓 modified）
+      function isVersionChangeItem(c) {
+        if (c.type !== "modified") return false;
+        const desc = c.description || "";
+        return desc.includes("版本號") || desc.includes("Rev. No.") ||
+               desc.includes("發布日期") || desc.includes("文件版本號");
+      }
+
+      // 重新整理每張卡片：若所有 li 都被隱藏則折疊整張卡片
+      function syncCardVisibility() {
+        analyzeListEl.querySelectorAll(".analyze-item").forEach((card) => {
+          const lis = card.querySelectorAll(".analyze-changes li");
+          if (!lis.length) return;
+          const allHidden = Array.from(lis).every((li) => li.classList.contains("filtered-hidden"));
+          card.classList.toggle("all-changes-hidden", allHidden);
+        });
+      }
+
+      function toggleHideReorder() {
+        hideReorderActive = !hideReorderActive;
+        applyHideReorder();
+      }
+
+      function applyHideReorder() {
+        const btn = document.getElementById("hideReorderBtn");
+        const hint = document.getElementById("hideReorderHint");
+        let count = 0;
+        analyzeListEl.querySelectorAll(".analyze-changes li[data-fr='1']").forEach((li) => {
+          li.classList.toggle("filtered-hidden", hideReorderActive);
+          count++;
+        });
+        syncCardVisibility();
+        if (hideReorderActive) {
+          btn.textContent = "顯示頁面重排";
+          btn.style.background = "#0868c6";
+          hint.textContent = `已隱藏 ${count} 個頁面重排項目`;
+        } else {
+          btn.textContent = "隱藏頁面重排";
+          btn.style.background = "#475569";
+          hint.textContent = count ? `共 ${count} 個頁面重排項目` : "";
+        }
+      }
+
+      function toggleHideVersion() {
+        hideVersionActive = !hideVersionActive;
+        applyHideVersion();
+      }
+
+      function applyHideVersion() {
+        const btn = document.getElementById("hideVersionBtn");
+        const hint = document.getElementById("hideVersionHint");
+        let count = 0;
+        analyzeListEl.querySelectorAll(".analyze-changes li[data-fv='1']").forEach((li) => {
+          li.classList.toggle("filtered-hidden", hideVersionActive);
+          count++;
+        });
+        syncCardVisibility();
+        if (hideVersionActive) {
+          btn.textContent = "顯示版本號變更";
+          btn.style.background = "#0868c6";
+          hint.textContent = `已隱藏 ${count} 個版本號變更項目`;
+        } else {
+          btn.textContent = "隱藏版本號變更";
+          btn.style.background = "#475569";
+          hint.textContent = count ? `共 ${count} 個版本號變更項目` : "";
+        }
+      }
 
       applyMarkMode(markModeEl.value);
       submitBtn.addEventListener("click", uploadAndStart);

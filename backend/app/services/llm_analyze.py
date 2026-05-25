@@ -536,16 +536,15 @@ def _build_prompt(
     ]
 
 
-def _dump_llm_debug(messages: list[dict], raw_response: str | None = None) -> Path:
+def _dump_llm_debug(messages: list[dict], settings: Settings, raw_response: str | None = None) -> Path:
     """
-    將送給 LLM 的 messages 存到 backend/tmp/llm_debug/<timestamp>/，
+    將送給 LLM 的 messages 存到 <storage_root>/llm_debug/<timestamp>/，
     圖片另存為 PNG 檔案，JSON 中以相對路徑取代 base64。
     若提供 raw_response，一併存為 response.txt。
     回傳 dump 目錄路徑。
     """
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    # 相對於此檔案往上兩層到 backend/，再進 tmp/llm_debug
-    debug_root = Path(__file__).parent.parent.parent / "tmp" / "llm_debug" / ts
+    debug_root = settings.storage_root / "llm_debug" / ts
     debug_root.mkdir(parents=True, exist_ok=True)
 
     img_dir = debug_root / "images"
@@ -834,9 +833,9 @@ def build_analyze_report(
 
         # Step 5：呼叫 LLM（並 dump debug 資料）
         if llm_candidates:
-            _dump_llm_debug(messages)  # 送出前先存 messages
+            _dump_llm_debug(messages, settings)  # 送出前先存 messages
             raw_response = _call_llm(messages, settings)
-            _dump_llm_debug(messages, raw_response)  # 收到回應後補存 response
+            _dump_llm_debug(messages, settings, raw_response)  # 收到回應後補存 response
             llm_result = _parse_llm_response(raw_response, llm_candidates)
         else:
             llm_result = {"overall_summary": "", "pages": []}
