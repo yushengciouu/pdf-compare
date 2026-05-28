@@ -471,13 +471,21 @@ def _build_prompt(
       "importance": "low | medium | high",
       "summary": "（這個槽位的主要差異是什麼，一到兩句話）",
       "changes": [
-        {"type": "added", "description": "（新增了什麼）"},
-        {"type": "removed", "description": "（刪除了什麼）"},
-        {"type": "modified", "description": "（修改了什麼，從「舊內容」改為「新內容」）"}
+        {"type": "added",    "category": "content",  "description": "（新增了什麼）"},
+        {"type": "removed",  "category": "content",  "description": "（刪除了什麼）"},
+        {"type": "modified", "category": "content",  "description": "（修改了什麼，從「舊內容」改為「新內容」）"},
+        {"type": "modified", "category": "reorder",  "description": "（頁碼/章節號/圖表編號純粹遞移，內容無實質變更）"},
+        {"type": "modified", "category": "version",  "description": "（文件版本號、發布日期、版權年份等行政資訊變更）"}
       ]
     }
   ]
 }
+
+《category 欄位說明》
+每個 change 項目必須填入以下三種 category 之一：
+- "content"：實質內容新增、刪除或修改（預設值，大多數 change 屬於此類）
+- "reorder"：頁碼偏移、章節號碼遞移（5.5.6→5.5.7）、圖表編號遞移（Figure 5-10→5-12）等純格式/排版變更，內容無實質差異
+- "version"：文件版本號（Rev. No.、Version）、發布日期（Release date、發佈日期）、版權年份（© 20XX）等行政資訊變更
 
 重要度判斷標準：
 - high：涉及金額、日期、關鍵條款、數字、當事人名稱等實質性修改
@@ -864,7 +872,7 @@ def build_analyze_report(
                         "importance": "low",
                         "summary": "頁面重排（版面調整導致頁面邊界位移，內容無實質變更）",
                         "changes": [
-                            {"type": "modified", "description": f"頁碼從 {candidate.get('before_page')} 變更為 {candidate.get('after_page')}（頁面重排）"}
+                            {"type": "modified", "category": "reorder", "description": f"頁碼從 {candidate.get('before_page')} 變更為 {candidate.get('after_page')}（頁面重排）"}
                         ],
                     }
                 )

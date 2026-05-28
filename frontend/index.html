@@ -46,7 +46,7 @@
       }
       .top-grid {
         display: grid;
-        grid-template-columns: 1.3fr 1.3fr 0.8fr auto;
+        grid-template-columns: 1fr 1fr auto;
         gap: 10px;
         margin-top: 14px;
       }
@@ -447,33 +447,25 @@
 
         <div class="top-grid">
           <div>
-            <label for="before">Before PDF</label>
+            <label for="before">舊版 PDF</label>
             <input id="before" type="file" accept="application/pdf" />
           </div>
           <div>
-            <label for="after">After PDF</label>
+            <label for="after">新版 PDF</label>
             <input id="after" type="file" accept="application/pdf" />
-          </div>
-          <div>
-            <label for="mode">模式</label>
-            <select id="mode">
-              <option value="smart" selected>smart（插頁/刪頁）</option>
-              <option value="fast">fast（N 對 N）</option>
-            </select>
           </div>
           <div class="action-col">
             <label>&nbsp;</label>
-            <button id="submit">影像分析</button>
             <button id="analyzeBtn" type="button" class="btn-analyze">LLM 分析</button>
           </div>
         </div>
 
         <div class="status" id="status">尚未開始</div>
-        <div class="progress">
+        <div class="progress" style="display:none">
           <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
           <div id="progressText" class="progress-text">0%</div>
         </div>
-        <div class="view-controls">
+        <div class="view-controls" style="display:none">
           <label for="maskOpacity" class="mono">遮罩</label>
           <input id="maskOpacity" class="mini-range" type="range" min="25" max="85" step="5" value="56" />
           <span id="maskOpacityText" class="mono">56%</span>
@@ -518,7 +510,7 @@
         </div>
       </section>
 
-      <section class="compare-layout">
+      <section class="compare-layout" style="display:none">
         <section class="pane" id="beforePane">
           <h3>Before</h3>
           <div id="beforePages" class="pages"></div>
@@ -535,19 +527,7 @@
     <script>
       const beforeInput = document.getElementById("before");
       const afterInput = document.getElementById("after");
-      const modeInput = document.getElementById("mode");
-      const submitBtn = document.getElementById("submit");
       const statusEl = document.getElementById("status");
-      const jobEl = document.getElementById("job");
-      const beforePagesEl = document.getElementById("beforePages");
-      const afterPagesEl = document.getElementById("afterPages");
-      const progressFillEl = document.getElementById("progressFill");
-      const progressTextEl = document.getElementById("progressText");
-      const maskOpacityEl = document.getElementById("maskOpacity");
-      const maskOpacityTextEl = document.getElementById("maskOpacityText");
-      const markModeEl = document.getElementById("markMode");
-      const beforePane = document.getElementById("beforePane");
-      const afterPane = document.getElementById("afterPane");
       const analyzeBtn = document.getElementById("analyzeBtn");
       const analyzeSectionEl = document.getElementById("analyzeSection");
       const analyzeStatusEl = document.getElementById("analyzeStatus");
@@ -563,118 +543,11 @@
       const analyzeBrowserAfterPane = document.getElementById("analyzeBrowserAfter");
 
       let analyzeTimerInterval = null;
-      let currentJobId = null;
       let syncingScroll = false;
-      let cachedPages = [];
-      let markMode = "all";
-      let syncHeightTimer = null;
-
-      function applyMarkMode(mode) {
-        markMode = mode || markMode;
-      }
-
-      function pickMaskSource(page) {
-        if (markMode === "removed") return page.assets.mask_removed_image || null;
-        if (markMode === "added") return page.assets.mask_added_image || null;
-        return page.assets.mask_image || null;
-      }
-
-      function stateLabel(state) {
-        if (state === "inserted") return "新增頁";
-        if (state === "deleted") return "刪除頁";
-        return "配對頁";
-      }
-
-      function createStateBadge(state) {
-        const badge = document.createElement("span");
-        badge.className = `state-badge ${state}`;
-        badge.textContent = stateLabel(state);
-        return badge;
-      }
-
-      function appendStateMask(wrap, state) {
-        if (state !== "inserted" && state !== "deleted") return;
-        const marker = document.createElement("div");
-        marker.className = `state-mask ${state}`;
-        wrap.appendChild(marker);
-      }
-
-      function applyMaskOpacity(value) {
-        const v = Number(value);
-        const opacity = Math.max(0.1, Math.min(0.95, v / 100));
-        document.querySelectorAll(".img-wrap .mask").forEach((el) => {
-          el.style.opacity = String(opacity);
-        });
-        maskOpacityTextEl.textContent = `${v}%`;
-      }
-      function scrollCardIntoPane(pane, card) {
-        if (!pane || !card) return;
-        const paneRect = pane.getBoundingClientRect();
-        const cardRect = card.getBoundingClientRect();
-        const deltaTop = cardRect.top - paneRect.top;
-        const targetTop = pane.scrollTop + deltaTop - 8;
-        pane.scrollTo({ top: Math.max(0, targetTop), behavior: "auto" });
-      }
-
-      function scheduleSyncSlotHeights() {
-        if (syncHeightTimer) {
-          clearTimeout(syncHeightTimer);
-        }
-        syncHeightTimer = setTimeout(syncSlotHeights, 40);
-      }
-
-      function syncSlotHeights() {
-        const beforeCards = beforePagesEl.querySelectorAll(".page-card");
-        beforeCards.forEach((beforeCard) => {
-          const id = beforeCard.id || "";
-          const slot = id.replace("before-slot-", "");
-          const afterCard = document.getElementById(`after-slot-${slot}`);
-          if (!afterCard) return;
-
-          beforeCard.style.minHeight = "";
-          afterCard.style.minHeight = "";
-          const maxH = Math.max(beforeCard.offsetHeight, afterCard.offsetHeight);
-          beforeCard.style.minHeight = `${maxH}px`;
-          afterCard.style.minHeight = `${maxH}px`;
-        });
-      }
-
-      function bindImageLoadHeightSync() {
-        const images = document.querySelectorAll("#beforePages img, #afterPages img");
-        images.forEach((img) => {
-          if (!img.complete) {
-            img.addEventListener("load", scheduleSyncSlotHeights, { once: true });
-            img.addEventListener("error", scheduleSyncSlotHeights, { once: true });
-          }
-        });
-      }
-
-      function flashCard(card) {
-        if (!card) return;
-        card.classList.add("focused");
-        setTimeout(() => card.classList.remove("focused"), 1400);
-      }
-
 
       function setStatus(text, isError = false) {
         statusEl.textContent = text;
         statusEl.classList.toggle("err", isError);
-      }
-
-      function clearResultView() {
-        beforePagesEl.innerHTML = "";
-        afterPagesEl.innerHTML = "";
-        cachedPages = [];
-        analyzeSectionEl.style.display = "none";
-        analyzeOverallEl.style.display = "none";
-        analyzeListEl.innerHTML = "";
-        analyzeSpinnerRowEl.style.display = "none";
-        analyzeStatusTextEl.textContent = "";
-        analyzeStatusTextEl.className = "";
-        analyzeBrowserEl.style.display = "none";
-        analyzeBrowserBeforePagesEl.innerHTML = "";
-        analyzeBrowserAfterPagesEl.innerHTML = "";
-        updateProgress(0, 0, "等待開始");
       }
 
       let syncAnalyzeHeightTimer = null;
@@ -887,199 +760,6 @@
         }
       }
 
-      function updateProgress(current, total, phase) {
-        let pct = 0;
-        if (total > 0) {
-          pct = Math.max(0, Math.min(100, Math.round((current / total) * 100)));
-        }
-        progressFillEl.style.width = `${pct}%`;
-        if (!phase) {
-          progressTextEl.textContent = `${pct}% (${current}/${total || 0})`;
-          return;
-        }
-        progressTextEl.textContent = `${phase} - ${pct}% (${current}/${total || 0})`;
-      }
-
-      async function uploadAndStart() {
-        const before = beforeInput.files?.[0];
-        const after = afterInput.files?.[0];
-        const mode = modeInput.value;
-
-        if (!before || !after) {
-          setStatus("請先選擇兩份 PDF", true);
-          return;
-        }
-
-        submitBtn.disabled = true;
-        clearResultView();
-        setStatus("上傳中...");
-        updateProgress(0, 100, "上傳中");
-
-        try {
-          const form = new FormData();
-          form.append("before", before);
-          form.append("after", after);
-          form.append("mode", mode);
-
-          const createRes = await fetch("/api/compare", { method: "POST", body: form });
-          if (!createRes.ok) {
-            throw new Error(await createRes.text());
-          }
-
-          const job = await createRes.json();
-          currentJobId = job.job_id;
-          jobEl.textContent = currentJobId;
-          setStatus("任務已建立，等待後端比對...");
-          updateProgress(0, 1, "排隊中");
-          await pollStatus(currentJobId);
-        } catch (err) {
-          setStatus(`錯誤：${err.message || err}`, true);
-        } finally {
-          submitBtn.disabled = false;
-        }
-      }
-
-      async function pollStatus(jobId) {
-        while (true) {
-          const res = await fetch(`/api/compare/${jobId}`);
-          if (!res.ok) throw new Error("查詢狀態失敗");
-          const data = await res.json();
-
-          const current = data.progress?.current ?? 0;
-          const total = data.progress?.total ?? 0;
-          setStatus(`狀態：${data.status}（${current}/${total}）`);
-          updateProgress(current, total || 1, data.status === "running" ? "比對中" : "排隊中");
-
-          if (data.status === "done") {
-            updateProgress(total || 1, total || 1, "載入結果中");
-            await loadAllPages(jobId, total || 0);
-            updateProgress(total || 1, total || 1, "完成");
-            return;
-          }
-          if (data.status === "failed") {
-            throw new Error(data.message || "比對失敗");
-          }
-          await new Promise((resolve) => setTimeout(resolve, 900));
-        }
-      }
-
-      async function loadAllPages(jobId, _totalSlots) {
-        const res = await fetch(`/api/compare/${jobId}/pages`);
-        if (!res.ok) {
-          throw new Error("載入頁面清單失敗");
-        }
-        const data = await res.json();
-        const pages = data.pages || [];
-        updateProgress(1, 1, "載入頁面");
-        cachedPages = pages;
-        renderPages(jobId, pages);
-      }
-
-      function createBeforePageCard(page) {
-        const card = document.createElement("article");
-        card.className = "page-card";
-        card.id = `before-slot-${page.page_no}`;
-
-        const head = document.createElement("div");
-        head.className = "page-head";
-        const left = document.createElement("span");
-        left.textContent = `Slot ${page.page_no}`;
-        head.appendChild(left);
-        head.appendChild(createStateBadge(page.mapping.state));
-        card.appendChild(head);
-
-        const wrap = document.createElement("div");
-        wrap.className = "img-wrap";
-
-        if (page.assets.before_image) {
-          const img = document.createElement("img");
-          img.src = page.assets.before_image;
-          img.alt = `before slot ${page.page_no}`;
-          img.loading = "lazy";
-          img.decoding = "async";
-          wrap.appendChild(img);
-          if (page.mapping.state === "deleted") {
-            appendStateMask(wrap, "deleted");
-          }
-
-        } else {
-          const empty = document.createElement("div");
-          empty.className = "placeholder";
-          empty.textContent = "此頁為新增頁，Before 無對應頁面";
-          wrap.appendChild(empty);
-        }
-
-        card.appendChild(wrap);
-        return card;
-      }
-
-      function createAfterPageCard(page) {
-        const card = document.createElement("article");
-        card.className = "page-card";
-        card.id = `after-slot-${page.page_no}`;
-
-        const head = document.createElement("div");
-        head.className = "page-head";
-        const left = document.createElement("span");
-        left.textContent = `Slot ${page.page_no}`;
-        const state = page.mapping?.state;
-        const right = createStateBadge(state || "paired");
-        head.appendChild(left);
-        head.appendChild(right);
-        card.appendChild(head);
-
-        const wrap = document.createElement("div");
-        wrap.className = "img-wrap";
-
-        if (page.assets.after_image) {
-          const img = document.createElement("img");
-          img.src = page.assets.after_image;
-          img.alt = `after slot ${page.page_no}`;
-          img.loading = "lazy";
-          img.decoding = "async";
-          wrap.appendChild(img);
-
-          const maskSrc = pickMaskSource(page);
-          if (maskSrc) {
-            const mask = document.createElement("img");
-            mask.className = "mask";
-            mask.src = maskSrc;
-            mask.alt = `mask slot ${page.page_no}`;
-            mask.loading = "lazy";
-            mask.decoding = "async";
-            mask.style.opacity = String(Math.max(0.1, Number(maskOpacityEl.value) / 100));
-            wrap.appendChild(mask);
-          }
-          if (page.mapping.state === "inserted") {
-            appendStateMask(wrap, "inserted");
-          }
-
-        } else {
-          const empty = document.createElement("div");
-          empty.className = "placeholder";
-          empty.textContent = "此頁為刪除頁，After 無對應頁面";
-          wrap.appendChild(empty);
-        }
-
-        card.appendChild(wrap);
-        return card;
-      }
-
-      function renderPages(jobId, pages) {
-        beforePagesEl.innerHTML = "";
-        afterPagesEl.innerHTML = "";
-
-        for (const page of pages) {
-          beforePagesEl.appendChild(createBeforePageCard(page));
-          afterPagesEl.appendChild(createAfterPageCard(page));
-        }
-
-        applyMaskOpacity(maskOpacityEl.value);
-        bindImageLoadHeightSync();
-        scheduleSyncSlotHeights();
-        setStatus(`比對完成：顯示 ${pages.length} 頁`);
-      }
-
       function bindScrollSync(a, b) {
         a.addEventListener("scroll", () => {
           if (syncingScroll) return;
@@ -1089,23 +769,10 @@
         });
       }
 
-      bindScrollSync(beforePane, afterPane);
-      bindScrollSync(afterPane, beforePane);
       bindScrollSync(analyzeBrowserBeforePane, analyzeBrowserAfterPane);
       bindScrollSync(analyzeBrowserAfterPane, analyzeBrowserBeforePane);
 
-      maskOpacityEl.addEventListener("input", () => applyMaskOpacity(maskOpacityEl.value));
-      markModeEl.addEventListener("change", () => {
-        applyMarkMode(markModeEl.value);
-        if (cachedPages.length) {
-          renderPages(currentJobId, cachedPages);
-        }
-      });
-
       window.addEventListener("resize", () => {
-        if (cachedPages.length) {
-          scheduleSyncSlotHeights();
-        }
         scheduleAnalyzeSyncHeights();
       });
 
@@ -1114,18 +781,26 @@
 
       // 判斷單一 change 項目是否為頁面重排類
       function isReorderChangeItem(c) {
+        if (c.category === "reorder") return true;
+        // fallback：舊版資料無 category 時改用關鍵字
         const desc = c.description || "";
-        return desc.includes("頁碼從") || desc.includes("頁面重排") || desc.includes("頁碼遞移") ||
+        return desc.includes("頁碼從") || desc.includes("頁碼由") || desc.includes("頁面重排") ||
+               desc.includes("頁碼遞移") || desc.includes("遞移至") ||
                desc.includes("頁碼偏移") || desc.includes("版面調整") || desc.includes("頁碼同步更新") ||
                desc.includes("內容無實質變更");
       }
 
-      // 判斷單一 change 項目是否為版本號/日期變更類（只抓 modified）
+      // 判斷單一 change 項目是否為版本號/日期/版權類變更
       function isVersionChangeItem(c) {
+        if (c.category === "version") return true;
+        // fallback：舊版資料無 category 時改用關鍵字（只抓 modified）
         if (c.type !== "modified") return false;
         const desc = c.description || "";
         return desc.includes("版本號") || desc.includes("Rev. No.") ||
-               desc.includes("發布日期") || desc.includes("文件版本號");
+               desc.includes("發布日期") || desc.includes("發佈日期") ||
+               desc.includes("文件版本號") || desc.includes("版權年份") ||
+               desc.includes("Release date") || desc.includes("日期從") ||
+               desc.includes("© 20");
       }
 
       // 重新整理每張卡片：若所有 li 都被隱藏則折疊整張卡片
@@ -1188,8 +863,8 @@
         }
       }
 
-      applyMarkMode(markModeEl.value);
-      submitBtn.addEventListener("click", uploadAndStart);
+      applyHideReorder();
+      applyHideVersion();
       analyzeBtn.addEventListener("click", runAnalyze);
     </script>
   </body>
