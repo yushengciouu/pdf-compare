@@ -14,13 +14,12 @@ x-backend: &backend-common
 services:
   api:
     <<: *backend-common
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
     ports:
       - "8000:8000"
     volumes:
       - ./var:/var
       - ./frontend:/frontend
-      - ./backend/app:/app/app  # 掛載程式碼，改完自動 reload，不需重新 build
     environment:
       PDF_COMPARE_STORAGE_ROOT: /var/compare
       PDF_COMPARE_FRONTEND_DIR: /frontend
