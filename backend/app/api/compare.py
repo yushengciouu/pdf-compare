@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 
 from app.core.config import Settings, get_settings
 from app.models.schemas import (
@@ -57,6 +57,7 @@ def _validate_pdf(upload: UploadFile) -> None:
 async def create_compare_job(
     before: Annotated[UploadFile, File(...)],
     after: Annotated[UploadFile, File(...)],
+    background_tasks: BackgroundTasks,
     mode: Annotated[CompareMode, Form()] = "smart",
     settings: Settings = Depends(get_settings),
 ) -> CompareCreateResponse:
@@ -69,7 +70,7 @@ async def create_compare_job(
     await _save_upload(before, job_root / "input" / "before.pdf", max_bytes)
     await _save_upload(after, job_root / "input" / "after.pdf", max_bytes)
 
-    run_compare_job.apply_async(args=[job_id, mode])
+    background_tasks.add_task(run_compare_job, job_id, mode)
     return CompareCreateResponse(job_id=job_id, status="queued", mode=mode)
 
 

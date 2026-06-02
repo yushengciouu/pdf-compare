@@ -18,61 +18,25 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 3) 準備環境變數
+### 3) 準備環境變數（可選）
 
 ```powershell
 copy .env.example .env
 ```
 
-### 4) 啟動 Redis
-
-如果有 Docker：
-
-```powershell
-docker run -d --name pdf-compare-redis -p 6379:6379 redis:7
-```
-
-若容器已存在：
-
-```powershell
-docker start pdf-compare-redis
-```
-
-### 5) 開三個終端機啟動服務
-
-每個終端機都要先進到 `backend` 並啟用 `.venv`。
-
-終端機 1（API）：
+### 4) 啟動 API（單一指令）
 
 ```powershell
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-終端機 2（Worker）：
-
-```powershell
-celery -A app.workers.celery_app.celery_app worker --loglevel=info --pool=solo
-```
-
-終端機 3（Beat，排程清理）：
-
-```powershell
-celery -A app.workers.celery_app.celery_app beat --loglevel=info
-```
+> 排程清理（每小時清除過期任務）已內建在 API 中，不需要額外啟動任何服務。
 
 ## 方式 B：Docker Compose 一鍵啟動
 
 ### 1) 準備環境變數（可選）
 
-複製範本並依需求修改（尤其是 LLM 設定）：
-
-```powershell
-Copy-Item backend\.env.example backend\.env
-```
-
-> Docker 部署時，路徑相關設定（`STORAGE_ROOT`、`FRONTEND_DIR`、Redis 連線）會由 `docker-compose.yml` 自動覆蓋，無需手動修改。
-
-若要更換 LLM 伺服器，可在 `.env` 修改，或直接帶入環境變數：
+若要更換 LLM 伺服器：
 
 ```powershell
 $env:PDF_COMPARE_LLM_BASE_URL = "http://your-llm-host:8001"
@@ -92,12 +56,9 @@ docker compose up --build
 docker compose up -d --build
 ```
 
-會同時啟動：
+只會啟動一個服務：
 
-- Redis（含 health check）
-- API（等 Redis 健康後啟動，2 workers）
-- Celery Worker（並行度 2）
-- Celery Beat（排程清理）
+- API（2 workers，內建排程清理）
 
 ### 關閉 Docker Compose
 

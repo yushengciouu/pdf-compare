@@ -18,10 +18,6 @@ class Settings(BaseSettings):
     max_pages: int = 200
     retention_hours: int = 24
 
-    redis_url: str = "redis://localhost:6379/0"
-    celery_broker_url: str = "redis://localhost:6379/0"
-    celery_result_backend: str = "redis://localhost:6379/1"
-
     render_dpi: int = 240
     diff_threshold: int = 25
     diff_min_area: int = 40
