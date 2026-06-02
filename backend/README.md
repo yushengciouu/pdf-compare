@@ -14,40 +14,24 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-如需調整儲存路徑、頁數限制、Redis 位置，可修改 `.env`。
+如需調整儲存路徑、頁數限制等，可修改 `.env`。
 
-## 3. 啟動 Redis
-
-請先確保本機有 Redis，並且可用 `redis://localhost:6379` 連線。
-
-## 4. 啟動 API
+## 3. 啟動 API
 
 ```bash
 uvicorn app.main:app --reload --port 8000
 ```
 
-## 5. 啟動 Celery Worker
+> 排程清理（每小時清除過期任務、每日清除 LLM debug 檔）已內建在 API 中，不需要額外啟動任何服務。
 
-```bash
-celery -A app.workers.celery_app.celery_app worker --loglevel=info
-```
-
-## 6. 啟動 Celery Beat（排程清理）
-
-```bash
-celery -A app.workers.celery_app.celery_app beat --loglevel=info
-```
-
-## 7. 測試頁面
+## 4. 測試頁面
 
 API 跑起來後可開啟：
 
 - `http://localhost:8000/`（最小測試前端）
 - `http://localhost:8000/docs`（Swagger）
 
-## 8. 快速自動測試（不需啟動 worker）
-
-可先做同步 smoke test，確認渲染與比對流程可跑通：
+## 5. 快速自動測試
 
 ```bash
 python scripts/smoke_test.py --mode fast
@@ -56,7 +40,7 @@ python scripts/smoke_test.py --mode smart
 
 若輸出 `status=done`，代表核心流程正常。
 
-## 9. 重要 API 補充
+## 6. 重要 API 補充
 
 - `POST /api/compare/prefilter`：LLM 前處理，快速挑出候選差異頁
 - `GET /api/compare/{job_id}/pages`：一次取回頁面清單（前端 lazy 顯示）
@@ -84,7 +68,7 @@ python scripts/smoke_test.py --mode smart
 
 為什麼快：只做頁級打分，不做完整框選與遮罩輸出。
 
-## 10. Docker Compose（可選）
+## 7. Docker Compose（可選）
 
 在專案根目錄執行：
 
@@ -92,4 +76,4 @@ python scripts/smoke_test.py --mode smart
 docker compose up --build
 ```
 
-會同時啟動 `api + worker + beat + redis`。
+只會啟動 `api` 一個 container。
