@@ -1,64 +1,48 @@
 # 啟動指南
 
-這份文件給專案使用者快速啟動系統。
+## 方式 A：本機開發
 
-## 方式 A：本機啟動（開發模式）
-
-### 1) 進入後端目錄
+> 以下指令在 `backend/` 目錄內執行
 
 ```powershell
-cd "C:\Users\felix_chiu\Desktop\project\pdf-compare\backend"
-```
-
-### 2) 建立虛擬環境並安裝套件
-
-```powershell
+cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
 ```
 
-### 3) 準備環境變數（可選）
+開啟 `http://localhost:8000` 即可使用。
 
-```powershell
-copy .env.example .env
-```
+## 方式 B：Docker（建議用於部署）
 
-### 4) 啟動 API（單一指令）
-
-```powershell
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-> 排程清理（每小時清除過期任務）已內建在 API 中，不需要額外啟動任何服務。
-
-## 方式 B：Docker Compose 一鍵啟動
-
-### 1) 準備環境變數（可選）
-
-若要更換 LLM 伺服器：
-
-```powershell
-$env:PDF_COMPARE_LLM_BASE_URL = "http://your-llm-host:8001"
-docker compose up -d --build
-```
-
-### 2) 建置並啟動
+> 以下指令在**專案根目錄**執行（`docker-compose.yml` 所在位置）
 
 ```powershell
 cd "C:\Users\felix_chiu\Desktop\project\pdf-compare"
 docker compose up --build
 ```
 
-若想背景執行：
+背景執行：
 
 ```powershell
 docker compose up -d --build
 ```
 
-只會啟動一個服務：
+只會啟動 **1 個 container**（api），內建排程清理，不需要 Redis 或其他服務。
 
-- API（2 workers，內建排程清理）
+### 更換 LLM 伺服器
+
+```powershell
+$env:PDF_COMPARE_LLM_BASE_URL = "http://your-llm-host:8001"
+docker compose up -d --build
+```
+
+或在 `backend/.env` 中設定：
+
+```
+PDF_COMPARE_LLM_BASE_URL=http://your-llm-host:8001
+```
 
 ### 關閉 Docker Compose
 
