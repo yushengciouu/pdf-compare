@@ -16,7 +16,7 @@ services:
     <<: *backend-common
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
     ports:
-      - "8000:8000"
+      - "8080:8000"
     volumes:
       - ./var:/var
       - ./frontend:/frontend
