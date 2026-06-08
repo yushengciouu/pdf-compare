@@ -126,46 +126,51 @@ def search_changes_boxes(
     after_page_index: int,
     changes: list[dict],
     dpi: float = 96.0,
+    state: str = "paired",
 ) -> dict:
     """
     根據 LLM changes 清單，在 before/after PDF 頁面搜尋差異位置。
 
+    state:
+      - "paired"  : before + after 都搜尋
+      - "inserted": 只搜尋 after（新增頁，before 不存在）
+      - "deleted" : 只搜尋 before（刪除頁，after 不存在）
+
     回傳格式：
     {
-        "before_boxes": [{"type": "removed"|"replaced", "x", "y", "w", "h",
-                          "text_before", "text_after"}],
-        "after_boxes":  [{"type": "added"|"replaced",   "x", "y", "w", "h",
-                          "text_before", "text_after"}]
+        "before_boxes": [...],
+        "after_boxes":  [...]
     }
     座標單位：像素（依 dpi 換算自 PDF points）。
     """
     before_boxes: list[dict] = []
     after_boxes: list[dict] = []
 
+    can_search_before = (state != "inserted") and (before_page_index >= 0)
+    can_search_after  = (state != "deleted")  and (after_page_index  >= 0)
+
     for change in changes:
         change_type = change.get("type", "modified")
         before_term, after_term = _extract_search_terms(change)
 
         if change_type in ("modified", "replaced"):
-            # 在 before 找舊文字（黃框）
-            if before_term:
+            if can_search_before and before_term:
                 for b in _search_in_page(before_pdf, before_page_index, before_term, dpi):
                     before_boxes.append({**b, "type": "replaced",
                                          "text_before": before_term, "text_after": after_term})
-            # 在 after 找新文字（黃框）
-            if after_term:
+            if can_search_after and after_term:
                 for b in _search_in_page(after_pdf, after_page_index, after_term, dpi):
                     after_boxes.append({**b, "type": "replaced",
                                         "text_before": before_term, "text_after": after_term})
 
         elif change_type == "removed":
-            if before_term:
+            if can_search_before and before_term:
                 for b in _search_in_page(before_pdf, before_page_index, before_term, dpi):
                     before_boxes.append({**b, "type": "removed",
                                          "text_before": before_term, "text_after": ""})
 
         elif change_type == "added":
-            if after_term:
+            if can_search_after and after_term:
                 for b in _search_in_page(after_pdf, after_page_index, after_term, dpi):
                     after_boxes.append({**b, "type": "added",
                                         "text_before": "", "text_after": after_term})

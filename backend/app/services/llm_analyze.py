@@ -713,21 +713,17 @@ def _persist_renders(
         after_text_boxes: list[dict] = []
         slot_no = int(entry["slot"])
         changes = (slot_to_changes or {}).get(slot_no, [])
-        if (
-            before_pdf is not None
-            and after_pdf is not None
-            and bp is not None
-            and ap is not None
-            and changes
-        ):
+        state = entry.get("state", "paired")
+        if before_pdf is not None and after_pdf is not None and changes:
             try:
                 diff_result = search_changes_boxes(
                     before_pdf=before_pdf,
                     after_pdf=after_pdf,
-                    before_page_index=int(bp) - 1,  # PDF 頁碼是 1-based，PyMuPDF 用 0-based
-                    after_page_index=int(ap) - 1,
+                    before_page_index=int(bp) - 1 if bp is not None else -1,
+                    after_page_index=int(ap) - 1 if ap is not None else -1,
                     changes=changes,
                     dpi=float(settings.llm_analyze_dpi),
+                    state=state,
                 )
                 before_text_boxes = diff_result["before_boxes"]
                 after_text_boxes = diff_result["after_boxes"]
