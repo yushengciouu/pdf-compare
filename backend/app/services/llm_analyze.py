@@ -29,6 +29,7 @@ from uuid import uuid4
 import httpx
 
 from app.core.config import Settings
+from app.services.diff_text import compute_text_diff_boxes
 from app.services.prefilter import Thresholds, build_prefilter_report
 from app.services.render import extract_page_texts, render_pdf_pages
 
@@ -672,9 +673,12 @@ def _persist_renders(
     before_render_dir: Path,
     after_render_dir: Path,
     all_pages: list[dict],
+    before_pdf: Path | None = None,
+    after_pdf: Path | None = None,
 ) -> tuple[str, list[dict]]:
     """
     將 before/after 已渲染的 PNG 複製到永久目錄，
+    並對 paired 頁面執行文字層 diff，產生差異框座標。
     回傳 (render_id, all_slots)。
     render_id 格式：analyze-{uuid}，掛載在 jobs_root 下。
     """
@@ -702,6 +706,24 @@ def _persist_renders(
             if ap is not None
             else None
         )
+
+        # 對 paired 頁面（before/after 都存在）執行文字層 diff
+        before_text_boxes: list[dict] = []
+        after_text_boxes: list[dict] = []
+        if before_pdf is not None and after_pdf is not None and bp is not None and ap is not None:
+            try:
+                diff_result = compute_text_diff_boxes(
+                    before_pdf=before_pdf,
+                    after_pdf=after_pdf,
+                    before_page_index=int(bp) - 1,  # PDF 頁碼是 1-based，PyMuPDF 用 0-based
+                    after_page_index=int(ap) - 1,
+                    dpi=float(settings.llm_analyze_dpi),
+                )
+                before_text_boxes = diff_result["before_boxes"]
+                after_text_boxes = diff_result["after_boxes"]
+            except Exception:
+                pass  # text diff 失敗不影響主流程
+
         all_slots.append(
             {
                 "slot": int(entry["slot"]),
@@ -710,6 +732,8 @@ def _persist_renders(
                 "after_page": ap,
                 "before_image": before_image,
                 "after_image": after_image,
+                "before_text_boxes": before_text_boxes,
+                "after_text_boxes": after_text_boxes,
             }
         )
 
@@ -775,7 +799,8 @@ def build_analyze_report(
 
         if not candidates:
             render_id, all_slots = _persist_renders(
-                settings, before_render_dir, after_render_dir, all_pages
+                settings, before_render_dir, after_render_dir, all_pages,
+                before_pdf=before_pdf, after_pdf=after_pdf,
             )
             return {
                 "summary": prefilter_report["summary"],
@@ -894,7 +919,8 @@ def build_analyze_report(
                 )
 
         render_id, all_slots = _persist_renders(
-            settings, before_render_dir, after_render_dir, all_pages
+            settings, before_render_dir, after_render_dir, all_pages,
+            before_pdf=before_pdf, after_pdf=after_pdf,
         )
 
         return {

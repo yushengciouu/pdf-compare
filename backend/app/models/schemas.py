@@ -108,6 +108,16 @@ class AnalyzeSummary(BaseModel):
     candidate_pages: int
 
 
+class TextDiffBox(BaseModel):
+    type: str  # "removed" | "added" | "replaced"
+    x: int
+    y: int
+    w: int
+    h: int
+    text_before: str = ""
+    text_after: str = ""
+
+
 class AnalyzeSlotInfo(BaseModel):
     slot: int
     state: PageState
@@ -115,6 +125,8 @@ class AnalyzeSlotInfo(BaseModel):
     after_page: int | None = None
     before_image: str | None = None
     after_image: str | None = None
+    before_text_boxes: list[TextDiffBox] = Field(default_factory=list)
+    after_text_boxes: list[TextDiffBox] = Field(default_factory=list)
 
 
 class AnalyzeResponse(BaseModel):

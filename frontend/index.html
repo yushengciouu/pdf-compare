@@ -418,6 +418,28 @@
         color: #3f4d63;
         margin-bottom: 4px;
       }
+      /* SVG 差異標示層 */
+      .diff-img-wrap {
+        position: relative;
+        display: block;
+      }
+      .diff-img-wrap img {
+        width: 100%;
+        display: block;
+        border-radius: 6px;
+      }
+      .diff-svg-overlay {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        overflow: visible;
+      }
+      .diff-svg-overlay rect {
+        pointer-events: all;
+        cursor: default;
+      }
 
       @media (max-width: 1200px) {
         .compare-layout {
@@ -577,6 +599,74 @@
 
         const stateLabels = { paired: "配對頁", inserted: "新增頁", deleted: "刪除頁" };
 
+        // 建立帶 SVG 差異標示的圖片包裝容器
+        // boxes: [{type, x, y, w, h, text_before, text_after}]
+        // 顏色：removed=紅, added=綠, replaced=黃
+        function buildDiffImgWrap(imgSrc, imgAlt, boxes) {
+          const wrap = document.createElement("div");
+          wrap.className = "diff-img-wrap";
+
+          const img = document.createElement("img");
+          img.src = imgSrc;
+          img.alt = imgAlt;
+          img.loading = "lazy";
+          img.decoding = "async";
+
+          // SVG 疊加層：等圖片載入後才能知道 naturalWidth/naturalHeight 設定 viewBox
+          const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+          svg.setAttribute("class", "diff-svg-overlay");
+
+          const BOX_COLORS = {
+            removed:  { fill: "rgba(220,38,38,0.15)",  stroke: "#dc2626" },
+            added:    { fill: "rgba(22,163,74,0.15)",   stroke: "#16a34a" },
+            replaced: { fill: "rgba(202,138,4,0.15)",   stroke: "#ca8a04" },
+          };
+
+          function drawBoxes() {
+            svg.innerHTML = "";
+            if (!boxes || !boxes.length) return;
+            const nw = img.naturalWidth;
+            const nh = img.naturalHeight;
+            if (!nw || !nh) return;
+            svg.setAttribute("viewBox", `0 0 ${nw} ${nh}`);
+            for (const box of boxes) {
+              const color = BOX_COLORS[box.type] || BOX_COLORS.replaced;
+              const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+              rect.setAttribute("x", box.x);
+              rect.setAttribute("y", box.y);
+              rect.setAttribute("width", box.w);
+              rect.setAttribute("height", box.h);
+              rect.setAttribute("fill", color.fill);
+              rect.setAttribute("stroke", color.stroke);
+              rect.setAttribute("stroke-width", "2");
+              rect.setAttribute("rx", "2");
+              // Tooltip
+              if (box.text_before || box.text_after) {
+                const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+                if (box.type === "replaced") {
+                  title.textContent = `${box.text_before} → ${box.text_after}`;
+                } else if (box.type === "removed") {
+                  title.textContent = `已刪除：${box.text_before}`;
+                } else {
+                  title.textContent = `新增：${box.text_after}`;
+                }
+                rect.appendChild(title);
+              }
+              svg.appendChild(rect);
+            }
+          }
+
+          img.addEventListener("load", () => {
+            drawBoxes();
+            scheduleAnalyzeSyncHeights();
+          }, { once: true });
+          img.addEventListener("error", scheduleAnalyzeSyncHeights, { once: true });
+
+          wrap.appendChild(img);
+          wrap.appendChild(svg);
+          return wrap;
+        }
+
         for (const slot of allSlots) {
           const stateText = stateLabels[slot.state] || slot.state;
 
@@ -589,15 +679,12 @@
           beforeHead.innerHTML = `<span>Slot ${slot.slot}</span><span>${stateText}${slot.before_page != null ? " · p." + slot.before_page : ""}</span>`;
           beforeCard.appendChild(beforeHead);
           if (slot.before_image) {
-            const img = document.createElement("img");
-            img.src = slot.before_image;
-            img.alt = `before slot ${slot.slot}`;
-            img.loading = "lazy";
-            img.decoding = "async";
-            img.style.cssText = "width:100%;border-radius:6px;display:block;";
-            img.addEventListener("load", scheduleAnalyzeSyncHeights, { once: true });
-            img.addEventListener("error", scheduleAnalyzeSyncHeights, { once: true });
-            beforeCard.appendChild(img);
+            const wrap = buildDiffImgWrap(
+              slot.before_image,
+              `before slot ${slot.slot}`,
+              slot.before_text_boxes || []
+            );
+            beforeCard.appendChild(wrap);
           } else {
             const ph = document.createElement("div");
             ph.className = "placeholder";
@@ -615,15 +702,12 @@
           afterHead.innerHTML = `<span>Slot ${slot.slot}</span><span>${stateText}${slot.after_page != null ? " · p." + slot.after_page : ""}</span>`;
           afterCard.appendChild(afterHead);
           if (slot.after_image) {
-            const img = document.createElement("img");
-            img.src = slot.after_image;
-            img.alt = `after slot ${slot.slot}`;
-            img.loading = "lazy";
-            img.decoding = "async";
-            img.style.cssText = "width:100%;border-radius:6px;display:block;";
-            img.addEventListener("load", scheduleAnalyzeSyncHeights, { once: true });
-            img.addEventListener("error", scheduleAnalyzeSyncHeights, { once: true });
-            afterCard.appendChild(img);
+            const wrap = buildDiffImgWrap(
+              slot.after_image,
+              `after slot ${slot.slot}`,
+              slot.after_text_boxes || []
+            );
+            afterCard.appendChild(wrap);
           } else {
             const ph = document.createElement("div");
             ph.className = "placeholder";
