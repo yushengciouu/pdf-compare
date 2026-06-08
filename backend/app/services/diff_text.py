@@ -1,138 +1,149 @@
 """
-文字層差異服務
+文字層差異服務 — Plan B：根據 LLM changes 在 PDF 文字層搜尋位置
 
-使用 PyMuPDF 取得 PDF 頁面的文字區塊（block）及其座標，
-再用 difflib.SequenceMatcher 比對 before/after 的文字區塊序列，
-找出「內容真正有變化」的區塊，回傳附有像素座標的差異框列表。
+流程：
+1. LLM 分析完後，changes 清單已包含語意上有意義的差異描述
+   例如：{"type": "modified", "description": "壹佰萬元 → 貳佰萬元"}
+2. 用 regex 從 description 提取「舊文字」和「新文字」
+3. 用 page.search_for() 在 before/after PDF 文字層搜尋這些字串
+4. 回傳像素座標，前端畫 SVG 框
 
-以區塊（段落/表格格）為單位比對，比單字層級穩定：
-- 純位移（同樣文字出現在不同位置）→ SequenceMatcher 能正確識別為 equal，不標記
-- 常見短字（的、了、是）在段落層級不會造成錯誤對齊
+優點：只標記 LLM 認定有語意意義的差異，不會誤標純位移。
 """
 
 from __future__ import annotations
 
-import difflib
 import re
 from pathlib import Path
 
 import fitz  # PyMuPDF
 
-# 區塊文字正規化：移除多餘空白，方便比對
-_WHITESPACE_RE = re.compile(r"\s+")
+# 匹配 "舊文字 → 新文字" 格式（支援中文箭頭 → 和 ASCII ->）
+_ARROW_RE = re.compile(r"(.+?)\s*(?:→|->|→)\s*(.+)")
+
+# 匹配「：」後面的引號內文字，例如 '第二條金額：「壹佰萬元」'
+_COLON_QUOTE_RE = re.compile(r"[：:][「『""](.+?)[」』""]")
+
+# 最短搜尋字串長度（太短的詞搜出來會太多）
+_MIN_SEARCH_LEN = 2
 
 
-def _normalize(text: str) -> str:
-    return _WHITESPACE_RE.sub(" ", text).strip()
-
-
-def _get_blocks(pdf_path: Path, page_index: int) -> list[dict]:
+def _extract_search_terms(change: dict) -> tuple[str, str]:
     """
-    取得指定頁面（0-based）的所有文字區塊及其 PDF 座標（unit: points, 72dpi）。
-    回傳格式：[{"text": str, "x0": float, "y0": float, "x1": float, "y1": float}]
-    只回傳 type=0（文字）的區塊，忽略圖片區塊。
+    從 change dict 提取 (before_term, after_term)。
+    回傳空字串表示無法提取。
     """
+    desc = change.get("description", "")
+    change_type = change.get("type", "modified")
+
+    # 優先嘗試箭頭格式 "X → Y"
+    m = _ARROW_RE.search(desc)
+    if m:
+        before = m.group(1).strip()
+        after = m.group(2).strip()
+        # 去除前綴說明文字，只取最後一個冒號後面的部分
+        before = re.split(r"[：:]", before)[-1].strip().strip("\u300c\u300e\u201c\u2018\u300d\u300f\u201d\u2019")
+        after = re.split(r"[：:]", after)[-1].strip().strip("\u300c\u300e\u201c\u2018\u300d\u300f\u201d\u2019")
+        return before, after
+
+    # 嘗試「：引號」格式
+    quotes = _COLON_QUOTE_RE.findall(desc)
+    if len(quotes) >= 2:
+        return quotes[0], quotes[1]
+    if len(quotes) == 1:
+        if change_type == "removed":
+            return quotes[0], ""
+        elif change_type == "added":
+            return "", quotes[0]
+
+    # 對 added/removed，取描述的前半段作為搜尋詞（最多 30 字）
+    clean_desc = re.split(r"[（(]", desc)[0].strip()  # 去掉括號說明
+    clean_desc = re.sub(r"^(?:新增|刪除|增加|移除|新增了?|刪除了?)[：:]?\s*", "", clean_desc)
+    snippet = clean_desc[:30].strip()
+    if change_type == "removed":
+        return snippet, ""
+    elif change_type == "added":
+        return "", snippet
+
+    return "", ""
+
+
+def _search_in_page(pdf_path: Path, page_index: int, text: str, dpi: float) -> list[dict]:
+    """
+    在 PDF 指定頁面（0-based）搜尋 text，回傳像素座標框列表。
+    """
+    if not text or len(text) < _MIN_SEARCH_LEN:
+        return []
+    scale = dpi / 72.0
     doc = fitz.open(str(pdf_path))
     try:
         if page_index < 0 or page_index >= len(doc):
             return []
         page = doc[page_index]
-        # get_text("blocks") 回傳 (x0, y0, x1, y1, text, block_no, block_type)
-        raw_blocks = page.get_text("blocks")
-        result = []
-        for b in raw_blocks:
-            block_type = int(b[6])
-            if block_type != 0:  # 只要文字區塊
-                continue
-            text = _normalize(b[4])
-            if not text:
-                continue
-            result.append({"text": text, "x0": b[0], "y0": b[1], "x1": b[2], "y1": b[3]})
-        return result
+        rects = page.search_for(text)
+        boxes = []
+        for r in rects:
+            boxes.append({
+                "x": int(r.x0 * scale),
+                "y": int(r.y0 * scale),
+                "w": max(4, int((r.x1 - r.x0) * scale)),
+                "h": max(4, int((r.y1 - r.y0) * scale)),
+            })
+        return boxes
     finally:
         doc.close()
 
 
-def compute_text_diff_boxes(
+def search_changes_boxes(
     before_pdf: Path,
     after_pdf: Path,
     before_page_index: int,
     after_page_index: int,
+    changes: list[dict],
     dpi: float = 96.0,
-    min_change_ratio: float = 0.15,
 ) -> dict:
     """
-    比對 before/after 兩頁的文字層（區塊層級），回傳差異框列表。
-
-    min_change_ratio: replace 操作中，若兩段文字相似度 > (1 - min_change_ratio)，
-                      視為輕微差異（如頁碼），仍標記但可調整門檻過濾。
+    根據 LLM changes 清單，在 before/after PDF 頁面搜尋差異位置。
 
     回傳格式：
     {
         "before_boxes": [{"type": "removed"|"replaced", "x", "y", "w", "h",
-                           "text_before", "text_after"}],
+                          "text_before", "text_after"}],
         "after_boxes":  [{"type": "added"|"replaced",   "x", "y", "w", "h",
-                           "text_before", "text_after"}]
+                          "text_before", "text_after"}]
     }
     座標單位：像素（依 dpi 換算自 PDF points）。
     """
-    scale = dpi / 72.0
-
-    before_blocks = _get_blocks(before_pdf, before_page_index)
-    after_blocks = _get_blocks(after_pdf, after_page_index)
-
-    before_texts = [b["text"] for b in before_blocks]
-    after_texts = [b["text"] for b in after_blocks]
-
-    # autojunk=False：關閉「熱門元素自動視為 junk」，避免常見段落被忽略
-    matcher = difflib.SequenceMatcher(None, before_texts, after_texts, autojunk=False)
-
     before_boxes: list[dict] = []
     after_boxes: list[dict] = []
 
-    def _to_pixel_box(blk: dict, box_type: str, text_before: str, text_after: str) -> dict:
-        return {
-            "type": box_type,
-            "x": int(blk["x0"] * scale),
-            "y": int(blk["y0"] * scale),
-            "w": max(4, int((blk["x1"] - blk["x0"]) * scale)),
-            "h": max(4, int((blk["y1"] - blk["y0"]) * scale)),
-            "text_before": text_before[:120],   # 截斷避免 tooltip 過長
-            "text_after": text_after[:120],
-        }
+    for change in changes:
+        change_type = change.get("type", "modified")
+        before_term, after_term = _extract_search_terms(change)
 
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag == "equal":
-            continue
+        if change_type in ("modified", "replaced"):
+            # 在 before 找舊文字（黃框）
+            if before_term:
+                for b in _search_in_page(before_pdf, before_page_index, before_term, dpi):
+                    before_boxes.append({**b, "type": "replaced",
+                                         "text_before": before_term, "text_after": after_term})
+            # 在 after 找新文字（黃框）
+            if after_term:
+                for b in _search_in_page(after_pdf, after_page_index, after_term, dpi):
+                    after_boxes.append({**b, "type": "replaced",
+                                        "text_before": before_term, "text_after": after_term})
 
-        if tag == "replace":
-            # 進一步確認：若文字內容極為相似（只差數字/頁碼），仍標記
-            # 若完全相同（normalize 後），跳過（pure layout shift）
-            before_chunk = " ".join(before_texts[i1:i2])
-            after_chunk = " ".join(after_texts[j1:j2])
-            if before_chunk == after_chunk:
-                continue  # 同樣文字，純位移，不標記
+        elif change_type == "removed":
+            if before_term:
+                for b in _search_in_page(before_pdf, before_page_index, before_term, dpi):
+                    before_boxes.append({**b, "type": "removed",
+                                         "text_before": before_term, "text_after": ""})
 
-            # 計算相似度，太相似（>0.95）且都很短（頁碼類）也跳過
-            sim = difflib.SequenceMatcher(None, before_chunk, after_chunk).ratio()
-            is_short = len(before_chunk) < 10 and len(after_chunk) < 10
-            if sim > 0.95 and is_short:
-                continue
-
-            for blk in before_blocks[i1:i2]:
-                before_boxes.append(_to_pixel_box(blk, "replaced", blk["text"], after_chunk))
-            for blk in after_blocks[j1:j2]:
-                after_boxes.append(_to_pixel_box(blk, "replaced", before_chunk, blk["text"]))
-
-        elif tag == "delete":
-            before_chunk = " ".join(before_texts[i1:i2])
-            for blk in before_blocks[i1:i2]:
-                before_boxes.append(_to_pixel_box(blk, "removed", blk["text"], ""))
-
-        elif tag == "insert":
-            after_chunk = " ".join(after_texts[j1:j2])
-            for blk in after_blocks[j1:j2]:
-                after_boxes.append(_to_pixel_box(blk, "added", "", blk["text"]))
+        elif change_type == "added":
+            if after_term:
+                for b in _search_in_page(after_pdf, after_page_index, after_term, dpi):
+                    after_boxes.append({**b, "type": "added",
+                                        "text_before": "", "text_after": after_term})
 
     return {
         "before_boxes": before_boxes,

@@ -29,7 +29,7 @@ from uuid import uuid4
 import httpx
 
 from app.core.config import Settings
-from app.services.diff_text import compute_text_diff_boxes
+from app.services.diff_text import search_changes_boxes
 from app.services.prefilter import Thresholds, build_prefilter_report
 from app.services.render import extract_page_texts, render_pdf_pages
 
@@ -675,10 +675,11 @@ def _persist_renders(
     all_pages: list[dict],
     before_pdf: Path | None = None,
     after_pdf: Path | None = None,
+    slot_to_changes: dict[int, list[dict]] | None = None,
 ) -> tuple[str, list[dict]]:
     """
-    將 before/after 已渲染的 PNG 複製到永久目錄，
-    並對 paired 頁面執行文字層 diff，產生差異框座標。
+    將 before/after 已渲染的 PNG 複製到永久目錄。
+    若提供 slot_to_changes（LLM changes 清單），則用 page.search_for 標記差異位置。
     回傳 (render_id, all_slots)。
     render_id 格式：analyze-{uuid}，掛載在 jobs_root 下。
     """
@@ -707,22 +708,31 @@ def _persist_renders(
             else None
         )
 
-        # 對 paired 頁面（before/after 都存在）執行文字層 diff
+        # 根據 LLM changes 在 PDF 文字層搜尋差異位置（Plan B）
         before_text_boxes: list[dict] = []
         after_text_boxes: list[dict] = []
-        if before_pdf is not None and after_pdf is not None and bp is not None and ap is not None:
+        slot_no = int(entry["slot"])
+        changes = (slot_to_changes or {}).get(slot_no, [])
+        if (
+            before_pdf is not None
+            and after_pdf is not None
+            and bp is not None
+            and ap is not None
+            and changes
+        ):
             try:
-                diff_result = compute_text_diff_boxes(
+                diff_result = search_changes_boxes(
                     before_pdf=before_pdf,
                     after_pdf=after_pdf,
                     before_page_index=int(bp) - 1,  # PDF 頁碼是 1-based，PyMuPDF 用 0-based
                     after_page_index=int(ap) - 1,
+                    changes=changes,
                     dpi=float(settings.llm_analyze_dpi),
                 )
                 before_text_boxes = diff_result["before_boxes"]
                 after_text_boxes = diff_result["after_boxes"]
             except Exception:
-                pass  # text diff 失敗不影響主流程
+                pass  # 搜尋失敗不影響主流程
 
         all_slots.append(
             {
@@ -801,6 +811,7 @@ def build_analyze_report(
             render_id, all_slots = _persist_renders(
                 settings, before_render_dir, after_render_dir, all_pages,
                 before_pdf=before_pdf, after_pdf=after_pdf,
+                slot_to_changes=None,
             )
             return {
                 "summary": prefilter_report["summary"],
@@ -918,9 +929,14 @@ def build_analyze_report(
                     }
                 )
 
+        # 建立 slot → changes 對照表，傳給 _persist_renders 做文字搜尋
+        slot_to_changes: dict[int, list[dict]] = {
+            int(p["slot"]): p.get("changes", []) for p in merged_pages
+        }
         render_id, all_slots = _persist_renders(
             settings, before_render_dir, after_render_dir, all_pages,
             before_pdf=before_pdf, after_pdf=after_pdf,
+            slot_to_changes=slot_to_changes,
         )
 
         return {
