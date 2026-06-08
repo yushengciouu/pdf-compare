@@ -19,51 +19,76 @@ from pathlib import Path
 import fitz  # PyMuPDF
 
 # 匹配 "舊文字 → 新文字" 格式（支援中文箭頭 → 和 ASCII ->）
-_ARROW_RE = re.compile(r"(.+?)\s*(?:→|->|→)\s*(.+)")
+_ARROW_RE = re.compile(r"(.+?)\s*(?:→|->)\s*(.+)")
 
-# 匹配「：」後面的引號內文字，例如 '第二條金額：「壹佰萬元」'
-_COLON_QUOTE_RE = re.compile(r"[：:][「『""](.+?)[」』""]")
+# 匹配「從 X 修改為/變更為/更新為/改為 Y」格式
+_FROM_TO_RE = re.compile(r"從\s*(.+?)\s*(?:修改為|變更為|更新為|改為|調整為)\s*(.+)")
 
-# 最短搜尋字串長度（太短的詞搜出來會太多）
-_MIN_SEARCH_LEN = 2
+# 匹配單引號或雙引號內的文字：'...' 或 "..." 或 「...」
+_SINGLE_QUOTE_RE = re.compile(r"['\u2018\u2019](.+?)['\u2018\u2019]|[\"](. +?)[\"]|\u300c(.+?)\u300d")
+
+# 匹配最短搜尋字串長度（太短的詞搜出來會太多）
+_MIN_SEARCH_LEN = 3
 
 
 def _extract_search_terms(change: dict) -> tuple[str, str]:
     """
     從 change dict 提取 (before_term, after_term)。
     回傳空字串表示無法提取。
+
+    支援的 description 格式：
+    - "從 X 修改為 Y" / "從 X 變更為 Y"
+    - "X → Y"
+    - added 類型：取單引號 'X' 或英文名稱作為搜尋詞
     """
     desc = change.get("description", "")
     change_type = change.get("type", "modified")
 
-    # 優先嘗試箭頭格式 "X → Y"
-    m = _ARROW_RE.search(desc)
+    # 1. 優先嘗試「從 X 修改為/變更為 Y」格式（LLM 最常用）
+    m = _FROM_TO_RE.search(desc)
     if m:
         before = m.group(1).strip()
         after = m.group(2).strip()
-        # 去除前綴說明文字，只取最後一個冒號後面的部分
-        before = re.split(r"[：:]", before)[-1].strip().strip("\u300c\u300e\u201c\u2018\u300d\u300f\u201d\u2019")
-        after = re.split(r"[：:]", after)[-1].strip().strip("\u300c\u300e\u201c\u2018\u300d\u300f\u201d\u2019")
-        return before, after
+        # 取最後一段（去掉前綴說明）
+        before = re.split(r"[：:]", before)[-1].strip()
+        after = re.split(r"[,，。]", after)[0].strip()  # 取逗號前的部分
+        if before and after:
+            return before, after
 
-    # 嘗試「：引號」格式
-    quotes = _COLON_QUOTE_RE.findall(desc)
-    if len(quotes) >= 2:
-        return quotes[0], quotes[1]
-    if len(quotes) == 1:
+    # 2. 嘗試箭頭格式 "X → Y"
+    m = _ARROW_RE.search(desc)
+    if m:
+        before = re.split(r"[：:]", m.group(1).strip())[-1].strip()
+        after = re.split(r"[,，。]", m.group(2).strip())[0].strip()
+        if before and after:
+            return before, after
+
+    # 3. 嘗試單引號 'X' 格式（LLM 描述 added 時常用）
+    single_quotes = re.findall(r"'([^']{3,80})'", desc)
+    if single_quotes:
+        if change_type == "added":
+            return "", single_quotes[0]
+        elif change_type == "removed":
+            return single_quotes[0], ""
+        elif len(single_quotes) >= 2:
+            return single_quotes[0], single_quotes[1]
+        else:
+            return single_quotes[0], single_quotes[0]
+
+    # 4. 對 added/removed，從描述提取關鍵詞（去掉「新增」「刪除」等動詞前綴）
+    clean = re.sub(
+        r"^(?:新增了?|刪除了?|移除了?|增加了?)[：:：\s]*",
+        "", desc
+    ).strip()
+    # 取括號前的部分（去掉說明）
+    clean = re.split(r"[（(,，：:]", clean)[0].strip()
+    # 截取合理長度（3~60 字）
+    snippet = clean[:60].strip()
+    if len(snippet) >= _MIN_SEARCH_LEN:
         if change_type == "removed":
-            return quotes[0], ""
+            return snippet, ""
         elif change_type == "added":
-            return "", quotes[0]
-
-    # 對 added/removed，取描述的前半段作為搜尋詞（最多 30 字）
-    clean_desc = re.split(r"[（(]", desc)[0].strip()  # 去掉括號說明
-    clean_desc = re.sub(r"^(?:新增|刪除|增加|移除|新增了?|刪除了?)[：:]?\s*", "", clean_desc)
-    snippet = clean_desc[:30].strip()
-    if change_type == "removed":
-        return snippet, ""
-    elif change_type == "added":
-        return "", snippet
+            return "", snippet
 
     return "", ""
 
