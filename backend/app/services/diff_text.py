@@ -21,13 +21,12 @@ import fitz  # PyMuPDF
 # 匹配 "舊文字 → 新文字" 格式（支援中文箭頭 → 和 ASCII ->）
 _ARROW_RE = re.compile(r"(.+?)\s*(?:→|->)\s*(.+)")
 
-# 匹配「從 X 修改為/變更為/更新為/改為 Y」格式
-_FROM_TO_RE = re.compile(r"從\s*(.+?)\s*(?:修改為|變更為|更新為|改為|調整為)\s*(.+)")
+# 匹配「從/由 X 修改為/移至/遞移至 Y」格式
+_FROM_TO_RE = re.compile(
+    r"(?:從|由)\s*(.+?)\s*(?:修改為|變更為|更新為|改為|調整為|移至|遞移至|頁移至|調整至)\s*(.+)"
+)
 
-# 匹配單引號或雙引號內的文字：'...' 或 "..." 或 「...」
-_SINGLE_QUOTE_RE = re.compile(r"['\u2018\u2019](.+?)['\u2018\u2019]|[\"](. +?)[\"]|\u300c(.+?)\u300d")
-
-# 匹配最短搜尋字串長度（太短的詞搜出來會太多）
+# 最短搜尋字串長度（太短的詞搜出來會太多）
 _MIN_SEARCH_LEN = 3
 
 
@@ -44,15 +43,17 @@ def _extract_search_terms(change: dict) -> tuple[str, str]:
     desc = change.get("description", "")
     change_type = change.get("type", "modified")
 
-    # 1. 優先嘗試「從 X 修改為/變更為 Y」格式（LLM 最常用）
+    # 1. 優先嘗試「從/由 X 修改為/移至 Y」格式（LLM 最常用）
     m = _FROM_TO_RE.search(desc)
     if m:
         before = m.group(1).strip()
         after = m.group(2).strip()
         # 取最後一段（去掉前綴說明）
-        before = re.split(r"[：:]", before)[-1].strip()
-        after = re.split(r"[,，。]", after)[0].strip()  # 取逗號前的部分
-        if before and after:
+        before = re.split(r"[：:]", before)[-1].strip().strip("'\"")
+        after = re.split(r"[,，。]", after)[0].strip().strip("'\"")  # 取逗號前的部分
+        # 過濾掉純頁碼（太短且只是數字+頁）這類不值得標記
+        is_page_num = re.fullmatch(r"\d{1,3}\s*頁?", before) and re.fullmatch(r"\d{1,3}\s*頁?", after)
+        if before and after and not is_page_num:
             return before, after
 
     # 2. 嘗試箭頭格式 "X → Y"
@@ -96,16 +97,32 @@ def _extract_search_terms(change: dict) -> tuple[str, str]:
 def _search_in_page(pdf_path: Path, page_index: int, text: str, dpi: float) -> list[dict]:
     """
     在 PDF 指定頁面（0-based）搜尋 text，回傳像素座標框列表。
+    搜尋策略：
+    1. 先用原始字串搜尋
+    2. 找不到時，正規化空白後再試
+    3. 還找不到時，用 TEXT_INHIBIT_SPACES flag（忽略空白）再試
     """
     if not text or len(text) < _MIN_SEARCH_LEN:
         return []
     scale = dpi / 72.0
+    # 正規化空白（多個空格合為一個）
+    normalized = re.sub(r"\s+", " ", text).strip()
     doc = fitz.open(str(pdf_path))
     try:
         if page_index < 0 or page_index >= len(doc):
             return []
         page = doc[page_index]
-        rects = page.search_for(text)
+        # 嘗試 1：原始搜尋
+        rects = page.search_for(normalized)
+        # 嘗試 2：忽略空白差異
+        if not rects:
+            try:
+                rects = page.search_for(normalized, flags=fitz.TEXT_INHIBIT_SPACES)
+            except Exception:
+                pass
+        # 嘗試 3：縮短搜尋詞到前 30 字（針對太長的描述）
+        if not rects and len(normalized) > 30:
+            rects = page.search_for(normalized[:30].strip())
         boxes = []
         for r in rects:
             boxes.append({
