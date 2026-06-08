@@ -51,6 +51,8 @@ def _extract_search_terms(change: dict) -> tuple[str, str]:
         # 取最後一段（去掉前綴說明）
         before = re.split(r"[：:]", before)[-1].strip().strip("'\"")
         after = re.split(r"[,，。]", after)[0].strip().strip("'\"")  # 取逗號前的部分
+        # 去掉 LLM 常加的動詞前綴（「列出」「改為」「更新為」等）
+        after = re.sub(r"^(?:列出|新增|改為|更新為|調整為)\s*", "", after).strip()
         # 過濾掉純頁碼（太短且只是數字+頁）這類不值得標記
         is_page_num = re.fullmatch(r"\d{1,3}\s*頁?", before) and re.fullmatch(r"\d{1,3}\s*頁?", after)
         if before and after and not is_page_num:
@@ -83,6 +85,8 @@ def _extract_search_terms(change: dict) -> tuple[str, str]:
     ).strip()
     # 取括號前的部分（去掉說明）
     clean = re.split(r"[（(,，：:]", clean)[0].strip()
+    # 去掉尾部的中文描述詞（「規範」「說明」「定義」「內容」「資訊」等）
+    clean = re.sub(r"\s*(?:規範|說明|定義|內容|資訊|流程|程序|標準|要求|設定)$", "", clean).strip()
     # 截取合理長度（3~60 字）
     snippet = clean[:60].strip()
     if len(snippet) >= _MIN_SEARCH_LEN:
@@ -120,7 +124,17 @@ def _search_in_page(pdf_path: Path, page_index: int, text: str, dpi: float) -> l
                 rects = page.search_for(normalized, flags=fitz.TEXT_INHIBIT_SPACES)
             except Exception:
                 pass
-        # 嘗試 3：縮短搜尋詞到前 30 字（針對太長的描述）
+        # 嘗試 3：只取前幾個詞（針對 LLM 描述比 PDF 原文多字的情況）
+        # 例如 "5.12.1 Automotive Product 規範" → 先試 "5.12.1 Automotive Product"
+        if not rects and len(normalized) > 10:
+            words = normalized.split()
+            for n_words in range(len(words) - 1, 1, -1):
+                shorter = " ".join(words[:n_words])
+                if len(shorter) >= _MIN_SEARCH_LEN:
+                    rects = page.search_for(shorter)
+                    if rects:
+                        break
+        # 嘗試 4：只取前 30 字（針對超長描述）
         if not rects and len(normalized) > 30:
             rects = page.search_for(normalized[:30].strip())
         boxes = []
