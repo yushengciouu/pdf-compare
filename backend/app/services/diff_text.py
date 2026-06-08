@@ -29,6 +29,31 @@ _FROM_TO_RE = re.compile(
 # 最短搜尋字串長度（太短的詞搜出來會太多）
 _MIN_SEARCH_LEN = 3
 
+# 可直接在 PDF 文字層搜尋到的實體模式
+_ENTITY_RE = re.compile(
+    r'\bF-\d{3,4}\b'                     # 表單 ID：F-180, F-181
+    r'|Table\s+\d+[-.]?\d*'              # 表格參照：Table 5-2, Table 4-1
+    r'|\b\d+\.\d+(?:\.\d+)+'             # 多層節號：5.5.6, 5.4.2
+    r'|\b[A-Z]{2,}[-_]\d{3,}'            # 料號/代號：W-317, MTK-123
+    , re.IGNORECASE
+)
+
+
+def _clean_term(term: str) -> str:
+    """
+    清理提取出的詞：
+    - 去掉開頭的非 ASCII / 非中文意義字元，直到遇到 ASCII 英數字或已知模式
+    - 去掉結尾殘留的單個中文字
+    """
+    # 若開頭有非 ASCII，嘗試找第一個英文開頭的有用片段
+    m = _ENTITY_RE.search(term)
+    if m and m.start() > 0:
+        # 開頭有雜訊，用 entity 取代
+        return m.group().strip()
+    # 去掉結尾孤立的非 ASCII 字（1~2 個中文字）
+    term = re.sub(r'[\u4e00-\u9fff\uff00-\uffef]{1,2}$', '', term).strip()
+    return term
+
 
 def _extract_search_terms(change: dict) -> tuple[str, str]:
     """
@@ -50,7 +75,7 @@ def _extract_search_terms(change: dict) -> tuple[str, str]:
         after = m.group(2).strip()
         # 取最後一段（去掉前綴說明）
         before = re.split(r"[：:]", before)[-1].strip().strip("'\"")
-        after = re.split(r"[,，。]", after)[0].strip().strip("'\"")  # 取逗號前的部分
+        after = re.split(r"[,，。嚗]", after)[0].strip().strip("'\"")
         # 去掉 LLM 常加的動詞前綴（「列出」「改為」「更新為」等）
         after = re.sub(r"^(?:列出|新增|改為|更新為|調整為)\s*", "", after).strip()
         # 過濾掉純頁碼（太短且只是數字+頁）這類不值得標記
@@ -62,11 +87,23 @@ def _extract_search_terms(change: dict) -> tuple[str, str]:
     m = _ARROW_RE.search(desc)
     if m:
         before = re.split(r"[：:]", m.group(1).strip())[-1].strip()
-        after = re.split(r"[,，。]", m.group(2).strip())[0].strip()
+        after = re.split(r"[,，。嚗]", m.group(2).strip())[0].strip()
         if before and after:
             return before, after
 
-    # 3. 嘗試單引號 'X' 格式（LLM 描述 added 時常用）
+    # 3. 嘗試雙引號 "X" 格式（LLM 常用於強調新值）
+    double_quotes = re.findall(r'"([^"]{3,80})"', desc)
+    if double_quotes:
+        if change_type == "added":
+            return "", double_quotes[-1]
+        elif change_type == "removed":
+            return double_quotes[0], ""
+        elif len(double_quotes) >= 2:
+            return double_quotes[0], double_quotes[-1]
+        else:
+            return double_quotes[0], double_quotes[0]
+
+    # 4. 嘗試單引號 'X' 格式（LLM 描述 added 時常用）
     single_quotes = re.findall(r"'([^']{3,80})'", desc)
     if single_quotes:
         if change_type == "added":
@@ -78,22 +115,32 @@ def _extract_search_terms(change: dict) -> tuple[str, str]:
         else:
             return single_quotes[0], single_quotes[0]
 
-    # 4. 對 added/removed，從描述提取關鍵詞（去掉「新增」「刪除」等動詞前綴）
+    # 5. 對 added/removed，從描述提取關鍵詞（去掉「新增」「刪除」等動詞前綴）
     clean = re.sub(
-        r"^(?:新增了?|刪除了?|移除了?|增加了?)[：:：\s]*",
+        r"^(?:新增了?|刪除了?|移除了?|增加了?|添加了?|補充了?)[：:：\s]*",
         "", desc
     ).strip()
-    # 取括號前的部分（去掉說明）
-    clean = re.split(r"[（(,，：:]", clean)[0].strip()
+    # 取第一個分隔符前的部分（去掉說明）
+    clean = re.split(r"[（(,，：:嚗]", clean)[0].strip()
     # 去掉尾部的中文描述詞（「規範」「說明」「定義」「內容」「資訊」等）
     clean = re.sub(r"\s*(?:規範|說明|定義|內容|資訊|流程|程序|標準|要求|設定)$", "", clean).strip()
-    # 截取合理長度（3~60 字）
-    snippet = clean[:60].strip()
+    snippet = _clean_term(clean[:60].strip())
     if len(snippet) >= _MIN_SEARCH_LEN:
         if change_type == "removed":
             return snippet, ""
         elif change_type == "added":
             return "", snippet
+
+    # 6. Entity fallback：直接從描述抓取可在 PDF 搜尋的實體（表單 ID / 表格 / 節號）
+    m = _ENTITY_RE.search(desc)
+    if m:
+        entity = m.group().strip()
+        if change_type == "added":
+            return "", entity
+        elif change_type == "removed":
+            return entity, ""
+        elif change_type in ("modified", "replaced"):
+            return entity, entity  # 在 before/after 都搜尋同一個實體
 
     return "", ""
 
