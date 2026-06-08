@@ -1,71 +1,56 @@
 """
 文字層差異服務
 
-使用 PyMuPDF 取得 PDF 頁面的每個單字及其座標，
-再用 difflib.SequenceMatcher 比對 before/after 的文字序列，
-找出「內容真正有變化」的單字，回傳附有像素座標的差異框列表。
+使用 PyMuPDF 取得 PDF 頁面的文字區塊（block）及其座標，
+再用 difflib.SequenceMatcher 比對 before/after 的文字區塊序列，
+找出「內容真正有變化」的區塊，回傳附有像素座標的差異框列表。
 
-此方法的優點：純位移（文字相同）不會被標記，只標記內容真正改變的部分。
+以區塊（段落/表格格）為單位比對，比單字層級穩定：
+- 純位移（同樣文字出現在不同位置）→ SequenceMatcher 能正確識別為 equal，不標記
+- 常見短字（的、了、是）在段落層級不會造成錯誤對齊
 """
 
 from __future__ import annotations
 
+import difflib
+import re
 from pathlib import Path
 
 import fitz  # PyMuPDF
 
+# 區塊文字正規化：移除多餘空白，方便比對
+_WHITESPACE_RE = re.compile(r"\s+")
 
-def _get_words(pdf_path: Path, page_index: int) -> list[dict]:
+
+def _normalize(text: str) -> str:
+    return _WHITESPACE_RE.sub(" ", text).strip()
+
+
+def _get_blocks(pdf_path: Path, page_index: int) -> list[dict]:
     """
-    取得指定頁面（0-based）的所有單字及其 PDF 座標（unit: points, 72dpi）。
+    取得指定頁面（0-based）的所有文字區塊及其 PDF 座標（unit: points, 72dpi）。
     回傳格式：[{"text": str, "x0": float, "y0": float, "x1": float, "y1": float}]
+    只回傳 type=0（文字）的區塊，忽略圖片區塊。
     """
     doc = fitz.open(str(pdf_path))
     try:
         if page_index < 0 or page_index >= len(doc):
             return []
         page = doc[page_index]
-        # get_text("words") 回傳 (x0, y0, x1, y1, word, block_no, line_no, word_no)
-        raw_words = page.get_text("words")
-        return [
-            {"text": w[4], "x0": w[0], "y0": w[1], "x1": w[2], "y1": w[3]}
-            for w in raw_words
-        ]
+        # get_text("blocks") 回傳 (x0, y0, x1, y1, text, block_no, block_type)
+        raw_blocks = page.get_text("blocks")
+        result = []
+        for b in raw_blocks:
+            block_type = int(b[6])
+            if block_type != 0:  # 只要文字區塊
+                continue
+            text = _normalize(b[4])
+            if not text:
+                continue
+            result.append({"text": text, "x0": b[0], "y0": b[1], "x1": b[2], "y1": b[3]})
+        return result
     finally:
         doc.close()
-
-
-def _merge_nearby_boxes(boxes: list[dict], gap: float = 8.0) -> list[dict]:
-    """
-    將水平方向相鄰（同行）的框合併，減少框數量，讓視覺更乾淨。
-    gap: 允許合併的最大水平間距（points）
-    """
-    if not boxes:
-        return []
-
-    # 先依 y0 排序（行），再依 x0 排序（左到右）
-    sorted_boxes = sorted(boxes, key=lambda b: (round(b["y0"] / 4), b["x0"]))
-    merged: list[dict] = []
-    current = dict(sorted_boxes[0])
-
-    for box in sorted_boxes[1:]:
-        # 同一行（y 範圍有重疊）且水平距離夠近 → 合併
-        same_row = not (box["y0"] > current["y1"] or box["y1"] < current["y0"])
-        close_enough = box["x0"] - current["x1"] <= gap
-        if same_row and close_enough and box["type"] == current["type"]:
-            current["x1"] = max(current["x1"], box["x1"])
-            current["y0"] = min(current["y0"], box["y0"])
-            current["y1"] = max(current["y1"], box["y1"])
-            if box.get("text_before"):
-                current["text_before"] = (current.get("text_before", "") + " " + box["text_before"]).strip()
-            if box.get("text_after"):
-                current["text_after"] = (current.get("text_after", "") + " " + box["text_after"]).strip()
-        else:
-            merged.append(current)
-            current = dict(box)
-
-    merged.append(current)
-    return merged
 
 
 def compute_text_diff_boxes(
@@ -74,97 +59,82 @@ def compute_text_diff_boxes(
     before_page_index: int,
     after_page_index: int,
     dpi: float = 96.0,
+    min_change_ratio: float = 0.15,
 ) -> dict:
     """
-    比對 before/after 兩頁的文字層，回傳差異框列表。
+    比對 before/after 兩頁的文字層（區塊層級），回傳差異框列表。
+
+    min_change_ratio: replace 操作中，若兩段文字相似度 > (1 - min_change_ratio)，
+                      視為輕微差異（如頁碼），仍標記但可調整門檻過濾。
 
     回傳格式：
     {
-        "before_boxes": [
-            {"type": "removed"|"replaced", "x": int, "y": int, "w": int, "h": int,
-             "text_before": str, "text_after": str}
-        ],
-        "after_boxes": [
-            {"type": "added"|"replaced", "x": int, "y": int, "w": int, "h": int,
-             "text_before": str, "text_after": str}
-        ]
+        "before_boxes": [{"type": "removed"|"replaced", "x", "y", "w", "h",
+                           "text_before", "text_after"}],
+        "after_boxes":  [{"type": "added"|"replaced",   "x", "y", "w", "h",
+                           "text_before", "text_after"}]
     }
-
     座標單位：像素（依 dpi 換算自 PDF points）。
     """
     scale = dpi / 72.0
 
-    before_words = _get_words(before_pdf, before_page_index)
-    after_words = _get_words(after_pdf, after_page_index)
+    before_blocks = _get_blocks(before_pdf, before_page_index)
+    after_blocks = _get_blocks(after_pdf, after_page_index)
 
-    before_texts = [w["text"] for w in before_words]
-    after_texts = [w["text"] for w in after_words]
+    before_texts = [b["text"] for b in before_blocks]
+    after_texts = [b["text"] for b in after_blocks]
 
-    matcher = __import__("difflib").SequenceMatcher(
-        None, before_texts, after_texts, autojunk=False
-    )
+    # autojunk=False：關閉「熱門元素自動視為 junk」，避免常見段落被忽略
+    matcher = difflib.SequenceMatcher(None, before_texts, after_texts, autojunk=False)
 
-    before_boxes_raw: list[dict] = []
-    after_boxes_raw: list[dict] = []
+    before_boxes: list[dict] = []
+    after_boxes: list[dict] = []
+
+    def _to_pixel_box(blk: dict, box_type: str, text_before: str, text_after: str) -> dict:
+        return {
+            "type": box_type,
+            "x": int(blk["x0"] * scale),
+            "y": int(blk["y0"] * scale),
+            "w": max(4, int((blk["x1"] - blk["x0"]) * scale)),
+            "h": max(4, int((blk["y1"] - blk["y0"]) * scale)),
+            "text_before": text_before[:120],   # 截斷避免 tooltip 過長
+            "text_after": text_after[:120],
+        }
 
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
             continue
 
-        if tag in ("replace", "delete"):
-            # before 的單字被改或被刪 → 標在 before 圖片上
-            for word in before_words[i1:i2]:
-                box_type = "replaced" if tag == "replace" else "removed"
-                text_after = " ".join(w["text"] for w in after_words[j1:j2]) if tag == "replace" else ""
-                before_boxes_raw.append(
-                    {
-                        "type": box_type,
-                        "x0": word["x0"],
-                        "y0": word["y0"],
-                        "x1": word["x1"],
-                        "y1": word["y1"],
-                        "text_before": word["text"],
-                        "text_after": text_after,
-                    }
-                )
+        if tag == "replace":
+            # 進一步確認：若文字內容極為相似（只差數字/頁碼），仍標記
+            # 若完全相同（normalize 後），跳過（pure layout shift）
+            before_chunk = " ".join(before_texts[i1:i2])
+            after_chunk = " ".join(after_texts[j1:j2])
+            if before_chunk == after_chunk:
+                continue  # 同樣文字，純位移，不標記
 
-        if tag in ("replace", "insert"):
-            # after 的單字是新增或替換 → 標在 after 圖片上
-            for word in after_words[j1:j2]:
-                box_type = "replaced" if tag == "replace" else "added"
-                text_before = " ".join(w["text"] for w in before_words[i1:i2]) if tag == "replace" else ""
-                after_boxes_raw.append(
-                    {
-                        "type": box_type,
-                        "x0": word["x0"],
-                        "y0": word["y0"],
-                        "x1": word["x1"],
-                        "y1": word["y1"],
-                        "text_before": text_before,
-                        "text_after": word["text"],
-                    }
-                )
+            # 計算相似度，太相似（>0.95）且都很短（頁碼類）也跳過
+            sim = difflib.SequenceMatcher(None, before_chunk, after_chunk).ratio()
+            is_short = len(before_chunk) < 10 and len(after_chunk) < 10
+            if sim > 0.95 and is_short:
+                continue
 
-    # 合併相鄰框，換算成像素座標
-    def _to_pixel_box(b: dict) -> dict:
-        x = int(b["x0"] * scale)
-        y = int(b["y0"] * scale)
-        w = max(4, int((b["x1"] - b["x0"]) * scale))
-        h = max(4, int((b["y1"] - b["y0"]) * scale))
-        return {
-            "type": b["type"],
-            "x": x,
-            "y": y,
-            "w": w,
-            "h": h,
-            "text_before": b.get("text_before", ""),
-            "text_after": b.get("text_after", ""),
-        }
+            for blk in before_blocks[i1:i2]:
+                before_boxes.append(_to_pixel_box(blk, "replaced", blk["text"], after_chunk))
+            for blk in after_blocks[j1:j2]:
+                after_boxes.append(_to_pixel_box(blk, "replaced", before_chunk, blk["text"]))
 
-    before_merged = _merge_nearby_boxes(before_boxes_raw)
-    after_merged = _merge_nearby_boxes(after_boxes_raw)
+        elif tag == "delete":
+            before_chunk = " ".join(before_texts[i1:i2])
+            for blk in before_blocks[i1:i2]:
+                before_boxes.append(_to_pixel_box(blk, "removed", blk["text"], ""))
+
+        elif tag == "insert":
+            after_chunk = " ".join(after_texts[j1:j2])
+            for blk in after_blocks[j1:j2]:
+                after_boxes.append(_to_pixel_box(blk, "added", "", blk["text"]))
 
     return {
-        "before_boxes": [_to_pixel_box(b) for b in before_merged],
-        "after_boxes": [_to_pixel_box(b) for b in after_merged],
+        "before_boxes": before_boxes,
+        "after_boxes": after_boxes,
     }
