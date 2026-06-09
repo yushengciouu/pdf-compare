@@ -310,19 +310,6 @@
         font-weight: 600;
         color: #2c1f4a;
       }
-      .jump-preview-btn {
-        margin-left: auto;
-        padding: 2px 9px;
-        font-size: 11px;
-        background: #3b82f6;
-        color: #fff;
-        border: none;
-        border-radius: 5px;
-        cursor: pointer;
-        white-space: nowrap;
-        flex-shrink: 0;
-      }
-      .jump-preview-btn:hover { background: #2563eb; }
       .importance-badge {
         display: inline-block;
         padding: 2px 9px;
@@ -829,10 +816,9 @@
               <div class="analyze-item-head">
                 <span>槽位 ${p.slot}｜${stateText}（before:${bp} → after:${ap}）</span>
                 <span class="importance-badge ${p.importance}">${impText}</span>
-                <span class="mono" style="font-size:11px;color:#888;">
+                <span class="mono" style="font-size:11px;color:#888;margin-left:auto">
                   image:${(p.image_diff ?? 0).toFixed(3)} text:${(p.text_diff ?? 0).toFixed(3)}
                 </span>
-                <button class="jump-preview-btn" data-slot="${p.slot}">↓ 跳至預覽</button>
               </div>
               <div class="analyze-summary-text">${p.summary || "（無摘要）"}</div>
               <ul class="analyze-changes">
@@ -843,19 +829,6 @@
                 }).join("")}
               </ul>
             `;
-            item.querySelector(".jump-preview-btn").addEventListener("click", (e) => {
-              e.stopPropagation();
-              const slot = e.currentTarget.dataset.slot;
-              const target = document.getElementById(`analyze-before-slot-${slot}`) ||
-                             document.getElementById(`analyze-after-slot-${slot}`);
-              if (target) {
-                const browser = document.getElementById("analyzeBrowser");
-                browser.style.display = "";
-                target.scrollIntoView({ behavior: "smooth", block: "start" });
-                target.style.outline = "2px solid #3b82f6";
-                setTimeout(() => { target.style.outline = ""; }, 1800);
-              }
-            });
             analyzeListEl.appendChild(item);
           });
           applyHideReorder();
