@@ -848,18 +848,29 @@
             jumpBtn.textContent = "↓ 跳至預覽";
             jumpBtn.addEventListener("click", () => {
               const slotId = p.slot;
-              const target = document.getElementById(`analyze-before-slot-${slotId}`) ||
-                             document.getElementById(`analyze-after-slot-${slotId}`);
-              if (target) {
-                // 確保 browser 顯示
-                document.getElementById("analyzeBrowser").style.display = "";
-                // 等 display 生效再 scroll
-                requestAnimationFrame(() => {
-                  target.scrollIntoView({ behavior: "smooth", block: "start" });
-                  target.style.outline = "2px solid #3b82f6";
-                  setTimeout(() => { target.style.outline = ""; }, 1800);
-                });
-              }
+              const beforeTarget = document.getElementById(`analyze-before-slot-${slotId}`);
+              const afterTarget  = document.getElementById(`analyze-after-slot-${slotId}`);
+              // 確保 browser 顯示
+              const browser = document.getElementById("analyzeBrowser");
+              browser.style.display = "";
+              requestAnimationFrame(() => {
+                // 1. main window 捲到 analyzeBrowser
+                browser.scrollIntoView({ behavior: "smooth", block: "start" });
+                // 2. pane 內部捲動到對應 card
+                if (beforeTarget) {
+                  const pane = document.getElementById("analyzeBrowserBefore");
+                  // offsetTop 相對於 pane（含 sticky header ~34px）
+                  pane.scrollTo({ top: beforeTarget.offsetTop - 40, behavior: "smooth" });
+                  beforeTarget.style.outline = "2px solid #3b82f6";
+                  setTimeout(() => { beforeTarget.style.outline = ""; }, 1800);
+                }
+                if (afterTarget) {
+                  const pane = document.getElementById("analyzeBrowserAfter");
+                  pane.scrollTo({ top: afterTarget.offsetTop - 40, behavior: "smooth" });
+                  afterTarget.style.outline = "2px solid #3b82f6";
+                  setTimeout(() => { afterTarget.style.outline = ""; }, 1800);
+                }
+              });
             });
 
             head.appendChild(titleSpan);
