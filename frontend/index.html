@@ -401,6 +401,7 @@
         gap: 10px;
       }
       .analyze-browser-pane {
+        position: relative;
         background: #f8fafc;
         border: 1px solid #dce3ec;
         border-radius: 10px;
@@ -442,6 +443,9 @@
         width: 100%;
         display: block;
         border-radius: 6px;
+        aspect-ratio: 3/4;
+        object-fit: contain;
+        background: #eef0f4;
       }
       .diff-svg-overlay {
         position: absolute;
@@ -624,7 +628,6 @@
           const img = document.createElement("img");
           img.src = imgSrc;
           img.alt = imgAlt;
-          img.loading = "lazy";
           img.decoding = "async";
 
           // SVG 疊加層：等圖片載入後才能知道 naturalWidth/naturalHeight 設定 viewBox
@@ -848,29 +851,27 @@
             jumpBtn.textContent = "↓ 跳至預覽";
             jumpBtn.addEventListener("click", () => {
               const slotId = p.slot;
-              const beforeTarget = document.getElementById(`analyze-before-slot-${slotId}`);
-              const afterTarget  = document.getElementById(`analyze-after-slot-${slotId}`);
-              // 確保 browser 顯示
               const browser = document.getElementById("analyzeBrowser");
               browser.style.display = "";
-              requestAnimationFrame(() => {
-                // 1. main window 捲到 analyzeBrowser
-                browser.scrollIntoView({ behavior: "smooth", block: "start" });
-                // 2. pane 內部捲動到對應 card
-                if (beforeTarget) {
-                  const pane = document.getElementById("analyzeBrowserBefore");
-                  // offsetTop 相對於 pane（含 sticky header ~34px）
-                  pane.scrollTo({ top: beforeTarget.offsetTop - 40, behavior: "smooth" });
-                  beforeTarget.style.outline = "2px solid #3b82f6";
-                  setTimeout(() => { beforeTarget.style.outline = ""; }, 1800);
-                }
-                if (afterTarget) {
-                  const pane = document.getElementById("analyzeBrowserAfter");
-                  pane.scrollTo({ top: afterTarget.offsetTop - 40, behavior: "smooth" });
-                  afterTarget.style.outline = "2px solid #3b82f6";
-                  setTimeout(() => { afterTarget.style.outline = ""; }, 1800);
-                }
-              });
+              // main window 瞬間跳到 browser
+              browser.scrollIntoView({ behavior: "instant", block: "start" });
+              // pane 有 position:relative，card.offsetTop 即相對 pane 的距離
+              // 減掉 h4 sticky header 高度（~34px）
+              const H4_H = 34;
+              const beforeCard = document.getElementById(`analyze-before-slot-${slotId}`);
+              if (beforeCard) {
+                const pane = document.getElementById("analyzeBrowserBefore");
+                pane.scrollTop = beforeCard.offsetTop - H4_H;
+                beforeCard.style.outline = "2px solid #3b82f6";
+                setTimeout(() => { beforeCard.style.outline = ""; }, 1800);
+              }
+              const afterCard = document.getElementById(`analyze-after-slot-${slotId}`);
+              if (afterCard) {
+                const pane = document.getElementById("analyzeBrowserAfter");
+                pane.scrollTop = afterCard.offsetTop - H4_H;
+                afterCard.style.outline = "2px solid #3b82f6";
+                setTimeout(() => { afterCard.style.outline = ""; }, 1800);
+              }
             });
 
             head.appendChild(titleSpan);
