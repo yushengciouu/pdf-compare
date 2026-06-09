@@ -160,6 +160,7 @@ def _build_page_message_content(
     after_render_dir: Path,
     before_texts: list[str],
     after_texts: list[str],
+    all_candidates: list[dict] | None = None,
 ) -> list[dict]:
     """
     為單一候選頁組裝 multimodal message content list。
@@ -313,6 +314,57 @@ def _build_page_message_content(
                     content.append({
                         "type": "image_url",
                         "image_url": {"url": _png_to_base64(cand_png)},
+                    })
+
+    # --- inserted/deleted 頁：附加鄰近舊版/新版頁面文字供跨頁比對 ---
+    # 從 all_candidates 找相鄰 slot 的 before_page（inserted）或 after_page（deleted），
+    # 再向前後各擴展 1 頁，讓 LLM 能逐一核對章節號碼是否已存在於另一版本。
+    if state in ("inserted", "deleted") and all_candidates is not None:
+        is_inserted = state == "inserted"
+        ref_texts = before_texts if is_inserted else after_texts
+        ref_label = "舊版" if is_inserted else "新版"
+        page_key = "before_page" if is_inserted else "after_page"
+        my_slot = int(slot)
+
+        # 找相鄰 slot（slot 編號距離 ≤ 2）中有配對頁碼的那些 before/after_page
+        neighbor_ref_pages: set[int] = set()
+        for c in all_candidates:
+            cs = int(c.get("slot", -1))
+            if c.get(page_key) is not None and abs(cs - my_slot) <= 2 and cs != my_slot:
+                rp = int(c[page_key])
+                neighbor_ref_pages.add(rp)
+                # 向前後各擴展 1 頁
+                if rp > 1:
+                    neighbor_ref_pages.add(rp - 1)
+                if rp < len(ref_texts):
+                    neighbor_ref_pages.add(rp + 1)
+
+        if neighbor_ref_pages:
+            common_skip = _detect_common_prefix_len(before_texts + after_texts)
+            neighbor_items: list[tuple[int, str]] = []
+            for rp in sorted(neighbor_ref_pages):
+                if 1 <= rp <= len(ref_texts):
+                    stripped = ref_texts[rp - 1][common_skip:].strip()[:1500]
+                    if stripped:
+                        neighbor_items.append((rp, stripped))
+
+            if neighbor_items:
+                hint = (
+                    f"⚠️【{'新增' if is_inserted else '刪除'}頁跨頁比對】"
+                    f"以下為鄰近{ref_label}頁面文字。"
+                    f"請在判斷此頁內容是否為真正{'新增' if is_inserted else '刪除'}前，"
+                    f"逐一對照各章節號碼與段落首句是否已存在於下方{ref_label}頁面中。\n"
+                    f"若某章節/段落已存在於{ref_label}鄰頁 → 屬於頁面重排，不得列為 "
+                    f"{'added' if is_inserted else 'removed'}。\n"
+                    f"只有在所有{ref_label}鄰頁中都找不到的內容，才能判為 "
+                    f"{'added' if is_inserted else 'removed'}。"
+                )
+                # 在圖片之前插入警告（index 1，index 0 是 header text）
+                content.insert(1, {"type": "text", "text": hint})
+                for rp, text in neighbor_items:
+                    content.append({
+                        "type": "text",
+                        "text": f"【{ref_label}鄰頁文字（第 {rp} 頁，供跨頁位移比對參考）】\n{text}",
                     })
 
     return content
@@ -527,6 +579,7 @@ def _build_prompt(
             after_render_dir,
             before_texts,
             after_texts,
+            all_candidates=candidates,
         )
         user_content.extend(page_content)
         # 頁間分隔
