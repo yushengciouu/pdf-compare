@@ -310,6 +310,21 @@
         font-weight: 600;
         color: #2c1f4a;
       }
+      .jump-preview-btn {
+        align-self: center;
+        flex-shrink: 0;
+        padding: 2px 10px;
+        font-size: 11px;
+        font-weight: 600;
+        background: #3b82f6;
+        color: #fff;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        white-space: nowrap;
+        width: auto;
+      }
+      .jump-preview-btn:hover { background: #2563eb; }
       .importance-badge {
         display: inline-block;
         padding: 2px 9px;
@@ -812,23 +827,64 @@
             const stateText = stateLabels[p.state] || p.state;
             const impText = importanceLabel[p.importance] || p.importance;
 
-            item.innerHTML = `
-              <div class="analyze-item-head">
-                <span>槽位 ${p.slot}｜${stateText}（before:${bp} → after:${ap}）</span>
-                <span class="importance-badge ${p.importance}">${impText}</span>
-                <span class="mono" style="font-size:11px;color:#888;margin-left:auto">
-                  image:${(p.image_diff ?? 0).toFixed(3)} text:${(p.text_diff ?? 0).toFixed(3)}
-                </span>
-              </div>
-              <div class="analyze-summary-text">${p.summary || "（無摘要）"}</div>
-              <ul class="analyze-changes">
-                ${(p.changes || []).map((c) => {
-                  const fr = isReorderChangeItem(c) ? "1" : "0";
-                  const fv = isVersionChangeItem(c) ? "1" : "0";
-                  return `<li class="${c.type}" data-fr="${fr}" data-fv="${fv}">[${c.type}] ${c.description}</li>`;
-                }).join("")}
-              </ul>
-            `;
+            // head row: 用 DOM 建立，避免 innerHTML 內的 listener 跑掉
+            const head = document.createElement("div");
+            head.className = "analyze-item-head";
+
+            const titleSpan = document.createElement("span");
+            titleSpan.textContent = `槽位 ${p.slot}｜${stateText}（before:${bp} → after:${ap}）`;
+
+            const badge = document.createElement("span");
+            badge.className = `importance-badge ${p.importance}`;
+            badge.textContent = impText;
+
+            const diffSpan = document.createElement("span");
+            diffSpan.className = "mono";
+            diffSpan.style.cssText = "font-size:11px;color:#888;margin-left:auto";
+            diffSpan.textContent = `image:${(p.image_diff ?? 0).toFixed(3)} text:${(p.text_diff ?? 0).toFixed(3)}`;
+
+            const jumpBtn = document.createElement("button");
+            jumpBtn.className = "jump-preview-btn";
+            jumpBtn.textContent = "↓ 跳至預覽";
+            jumpBtn.addEventListener("click", () => {
+              const slotId = p.slot;
+              const target = document.getElementById(`analyze-before-slot-${slotId}`) ||
+                             document.getElementById(`analyze-after-slot-${slotId}`);
+              if (target) {
+                // 確保 browser 顯示
+                document.getElementById("analyzeBrowser").style.display = "";
+                // 等 display 生效再 scroll
+                requestAnimationFrame(() => {
+                  target.scrollIntoView({ behavior: "smooth", block: "start" });
+                  target.style.outline = "2px solid #3b82f6";
+                  setTimeout(() => { target.style.outline = ""; }, 1800);
+                });
+              }
+            });
+
+            head.appendChild(titleSpan);
+            head.appendChild(badge);
+            head.appendChild(diffSpan);
+            head.appendChild(jumpBtn);
+            item.appendChild(head);
+
+            const summaryDiv = document.createElement("div");
+            summaryDiv.className = "analyze-summary-text";
+            summaryDiv.textContent = p.summary || "（無摘要）";
+            item.appendChild(summaryDiv);
+
+            const ul = document.createElement("ul");
+            ul.className = "analyze-changes";
+            (p.changes || []).forEach((c) => {
+              const li = document.createElement("li");
+              li.className = c.type;
+              li.dataset.fr = isReorderChangeItem(c) ? "1" : "0";
+              li.dataset.fv = isVersionChangeItem(c) ? "1" : "0";
+              li.textContent = `[${c.type}] ${c.description}`;
+              ul.appendChild(li);
+            });
+            item.appendChild(ul);
+
             analyzeListEl.appendChild(item);
           });
           applyHideReorder();
