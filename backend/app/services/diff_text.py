@@ -125,6 +125,53 @@ def _clean_term(term: str) -> str:
     return term
 
 
+def _extract_list_terms(desc: str) -> list[str]:
+    """
+    從並列清單中提取每個搜尋項目 (避免使用中文角引號注釋，防止 py_compile 失敗)。
+    """
+    terms: list[str] = []
+    
+    # 1. 尋找列表開頭引導詞
+    list_parts = re.split(r"(?:包含|包括|像是|分別為|例如|：|:)", desc, maxsplit=1)
+    target_str = list_parts[1] if len(list_parts) > 1 else list_parts[0]
+    
+    # 2. 先處理斜線分隔的一到多個章節號/數字情況 (例如 5.3/5.4/5.5)
+    # 針對斜線數字做獨立抓取
+    slash_nums = re.findall(r"\b\d+\.\d+(?:\.\d+)*\b", target_str)
+    for num in slash_nums:
+        if len(num) >= 2:
+            terms.append(num)
+            
+    # 3. 依據中文頓號、英文 AND/及/與、以及逗號進行多重切分
+    raw_splits = re.split(r"[、，,;；]|(?:(?:\s+and\s+)|(?:\s+or\s+)|及|與|以及|\s+&\s+)", target_str)
+    
+    for split_item in raw_splits:
+        split_item = split_item.strip()
+        if not split_item:
+            continue
+            
+        # 清洗此項
+        cleaned = _clean_extracted_after(split_item)
+        
+        # 移除可能殘留在結尾的贅詞
+        cleaned = re.sub(r"\s*(?:描述修改|描述|說明|報告|內容|修訂|變更|修改|更名|紀錄|記錄)$", "", cleaned).strip()
+        
+        # 再次過濾括號與引號
+        cleaned = _clean_extracted_term(cleaned)
+        
+        # 如果該項中還藏有單獨的 Entity，例如 F-180
+        m = _ENTITY_RE.search(cleaned)
+        if m:
+            entity_val = m.group().strip()
+            if entity_val not in terms:
+                terms.append(entity_val)
+        
+        if _is_valid_search_term(cleaned) and cleaned not in terms:
+            terms.append(cleaned)
+            
+    return terms
+
+
 def _extract_search_terms(change: dict) -> tuple[list[str], list[str]]:
     """
     從 change dict 提取 (before_terms, after_terms)。
@@ -135,10 +182,24 @@ def _extract_search_terms(change: dict) -> tuple[list[str], list[str]]:
     2. 從/由 A 修改為 B
     3. A 修改為 B
     4. A → B
-    5. added/removed 類型之引號內容或 entity 列表
+    5. 並列清單式 (例如包含 A、B、C 等並列項目，可提取出全部的多個條件)
+    6. added/removed 類型之引號內容或 entity 列表
     """
     desc = change.get("description", "")
     change_type = change.get("type", "modified")
+
+    # A. 針對並列清單式 (例如包含 A、B、C)
+    # 若在文字中發現頓號、包含及多重並列，且為 added/removed，優先抽取多項
+    if "、" in desc or "包含" in desc or "包括" in desc or "and" in desc or " & " in desc:
+        items = _extract_list_terms(desc)
+        if items:
+            if change_type == "added":
+                return [], items
+            elif change_type == "removed":
+                return items, []
+            else:
+                # modified 形式，若能用特定格式切分則用特化解析，否則將 items 作為兩側備用
+                pass
 
     # A. 針對 modified / replaced 先嘗試進行雙側對比提取
     if change_type in ("modified", "replaced", "version", "reorder"):
