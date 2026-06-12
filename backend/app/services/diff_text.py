@@ -26,7 +26,22 @@ _FROM_TO_RE = re.compile(
     r"(?:從|由)\s*(.+?)\s*(?:修改為|變更為|更新為|改為|調整為|移至|遞移至|頁移至|調整至)\s*(.+)"
 )
 
-# 最短搜尋字串長度（太短的詞搜出來會太多）
+# 支援各種括號/引號/書名號包裹的修改格式 (例如：將「A」修改為「B」、將『A』改成『B』)
+_QUOTED_CHANGE_RE = re.compile(
+    r'(?:[「『"\'【［（\(《])(.+?)(?:[」』"\'】］）\)》])'
+    r'\s*(?:修改為|變更為|更新為|改為|調整為|取代為|替換為|更換為|修正為|調整至|遞移至|頁移至|改成|改成了|更名為|變更成|寫成|→|->)\s*'
+    r'(?:[「『"\'【［（\(《])(.+?)(?:[」』"\'】］）\)裝\]〉》])'
+)
+
+# 更廣譜的「A 修改為 B」格式（不限前綴）
+_DIRECT_CHANGE_RE = re.compile(
+    r'(.+?)\s*(?:修改為|變更為|更新為|改為|調整為|取代為|替換為|更換為|修正為|調整至|遞移至|頁移至|改成|改成了|更名為|變更成|寫成)\s*(.+)'
+)
+
+# 抓取單側任何引號內的內容（適用於 added / removed 格式，如：新增「安全手冊」）
+_ANY_QUOTES_RE = re.compile(r'["\'「』『」【】《》(（]([^"\'「』『」【】《》)）]{2,80})["\'「』『」【】《》)）]')
+
+# 最短搜尋字串長度（設定為 3，但對中文字另外放寬）
 _MIN_SEARCH_LEN = 3
 
 # 可直接在 PDF 文字層搜尋到的實體模式
@@ -40,19 +55,73 @@ _ENTITY_RE = re.compile(
 )
 
 
+def _is_valid_search_term(term: str) -> bool:
+    """
+    判斷搜尋詞是否有效。
+    為了防止中文字詞（通常為 2 個字，如「金額」、「變更」）被 _MIN_SEARCH_LEN = 3 阻擋而漏標，
+    如果含有中文字（CJK 字符），只要字數大於等於 2 即視為有效；英文等其他字串仍維持大於等於 3。
+    """
+    if not term:
+        return False
+    term = term.strip()
+    # 檢查是否包含中文字 (CJK Unified Ideographs)
+    has_cjk = any('\u4e00' <= char <= '\u9fff' for char in term)
+    if has_cjk:
+        return len(term) >= 2
+    return len(term) >= _MIN_SEARCH_LEN
+
+
+def _clean_extracted_term(term: str) -> str:
+    """
+    清理提取出的 before/after 搜尋詞：
+    - 移除常見引號及括號
+    - 移除冒號等前綴
+    - 移除「從」、「由」、「將」等語意引導詞
+    """
+    if not term:
+        return ""
+    term = term.strip()
+    term = term.strip("'\"`「」『』【】（）()［］[]{}<>《》 ")
+    if "：" in term:
+        term = term.split("：")[-1].strip()
+    if ":" in term:
+        term = term.split(":")[-1].strip()
+    
+    # 移除開頭可能多餘的介詞
+    prepositions = re.split(r"^(?:從|由|將)\s*", term)
+    if len(prepositions) > 1:
+        term = prepositions[-1].strip()
+        
+    return term.strip("'\"`「」『』【】（）()［］[]{}<>《》 ")
+
+
+def _clean_extracted_after(term: str) -> str:
+    """
+    進一步清理 after 關鍵詞：
+    - 去除結尾多餘的描述或標點
+    - 移除常見被誤納入的動詞
+    """
+    term = _clean_extracted_term(term)
+    # 取點、逗、分號、中英文括號前面的主字串
+    term = re.split(r"[,，。;；（(嚗\n]", term)[0].strip()
+    # 移除可能被誤分到裡面的動詞首語
+    term = re.sub(r"^(?:列出|新增|改為|更新為|調整為|修正為|變更為)\s*", "", term).strip()
+    return term.strip("'\"`「」『』【】（）()［］[]{}<>《》 ")
+
+
 def _clean_term(term: str) -> str:
     """
-    清理提取出的詞：
-    - 去掉開頭的非 ASCII / 非中文意義字元，直到遇到 ASCII 英數字或已知模式
-    - 去掉結尾殘留的單個中文字
+    對 added/removed 單側詞進行兜底清理：
+    - 若包含 Entity，且有少數無關跟隨字，只取實體
+    - 絕對不對純中文進行截斷 (保留完整字串)
     """
-    # 若開頭有非 ASCII，嘗試找第一個英文開頭的有用片段
+    if not term:
+        return ""
+    term = term.strip("'\"`「」『』【】（）()［］[]{}<>《》 ")
     m = _ENTITY_RE.search(term)
-    if m and m.start() > 0:
-        # 開頭有雜訊，用 entity 取代
-        return m.group().strip()
-    # 去掉結尾孤立的非 ASCII 字（1~2 個中文字）
-    term = re.sub(r'[\u4e00-\u9fff\uff00-\uffef]{1,2}$', '', term).strip()
+    if m:
+        if len(term) < 15:
+            return m.group().strip()
     return term
 
 
@@ -61,76 +130,110 @@ def _extract_search_terms(change: dict) -> tuple[list[str], list[str]]:
     從 change dict 提取 (before_terms, after_terms)。
     回傳空 list 表示無法提取。每個 list 可含多個搜尋詞。
 
-    支援的 description 格式：
-    - "從 X 修改為 Y" / "從 X 變更為 Y"
-    - "X → Y"
-    - added/removed 類型：取引號內容或 entity 列表
+    支援多種靈活的 description 格式：
+    1. 雙側有引號/括號的修改：「A」修改為「B」
+    2. 從/由 A 修改為 B
+    3. A 修改為 B
+    4. A → B
+    5. added/removed 類型之引號內容或 entity 列表
     """
     desc = change.get("description", "")
     change_type = change.get("type", "modified")
 
-    # 1. 優先嘗試「從/由 X 修改為/移至 Y」格式（LLM 最常用）
-    m = _FROM_TO_RE.search(desc)
-    if m:
-        before = m.group(1).strip()
-        after = m.group(2).strip()
-        before = re.split(r"[：:]", before)[-1].strip().strip("'\"")
-        after = re.split(r"[,，。嚗]", after)[0].strip().strip("'\"")
-        after = re.sub(r"^(?:列出|新增|改為|更新為|調整為)\s*", "", after).strip()
-        is_page_num = re.fullmatch(r"\d{1,3}\s*頁?", before) and re.fullmatch(r"\d{1,3}\s*頁?", after)
-        if before and after and not is_page_num:
-            return [before], [after]
+    # A. 針對 modified / replaced 先嘗試進行雙側對比提取
+    if change_type in ("modified", "replaced", "version", "reorder"):
+        # 1. 優先匹配：前後皆包含中文引號/英文引號包裹的情況 (如 「A」修改為「B」)
+        m = _QUOTED_CHANGE_RE.search(desc)
+        if m:
+            before = _clean_extracted_term(m.group(1))
+            after = _clean_extracted_after(m.group(2))
+            if _is_valid_search_term(before) or _is_valid_search_term(after):
+                return [before] if before else [], [after] if after else []
 
-    # 2. 嘗試箭頭格式 "X → Y"
-    m = _ARROW_RE.search(desc)
-    if m:
-        before = re.split(r"[：:]", m.group(1).strip())[-1].strip()
-        after = re.split(r"[,，。嚗]", m.group(2).strip())[0].strip()
-        if before and after:
-            return [before], [after]
+        # 2. 嘗試「從/由 X 修改為 Y」格式
+        m = _FROM_TO_RE.search(desc)
+        if m:
+            before = _clean_extracted_term(m.group(1))
+            after = _clean_extracted_after(m.group(2))
+            is_page_num = re.fullmatch(r"\d{1,3}\s*頁?", before) and re.fullmatch(r"\d{1,3}\s*頁?", after)
+            if not is_page_num:
+                if _is_valid_search_term(before) or _is_valid_search_term(after):
+                    return [before] if before else [], [after] if after else []
 
-    # 3. 嘗試雙引號 "X" 格式（LLM 常用於強調新值）
-    double_quotes = re.findall(r'"([^"]{3,80})"', desc)
+        # 3. 嘗試廣譜「X 修改為 Y」格式
+        m = _DIRECT_CHANGE_RE.search(desc)
+        if m:
+            before = _clean_extracted_term(m.group(1))
+            after = _clean_extracted_after(m.group(2))
+            is_page_num = re.fullmatch(r"\d{1,3}\s*頁?", before) and re.fullmatch(r"\d{1,3}\s*頁?", after)
+            if not is_page_num:
+                if _is_valid_search_term(before) or _is_valid_search_term(after):
+                    return [before] if before else [], [after] if after else []
+
+        # 4. 嘗試帶箭頭格式 "X → Y" 或 "X -> Y"
+        m = _ARROW_RE.search(desc)
+        if m:
+            before = _clean_extracted_term(m.group(1))
+            after = _clean_extracted_after(m.group(2))
+            if _is_valid_search_term(before) or _is_valid_search_term(after):
+                return [before] if before else [], [after] if after else []
+
+    # B. 嘗試使用引號 findall（例如：新增 "A"、刪除 「B」）
+    quoted_matches = _ANY_QUOTES_RE.findall(desc)
+    if quoted_matches:
+        cleaned_quotes = [q.strip() for q in quoted_matches if _is_valid_search_term(q)]
+        if cleaned_quotes:
+            if change_type == "added":
+                return [], cleaned_quotes
+            elif change_type == "removed":
+                return cleaned_quotes, []
+            else:
+                return [cleaned_quotes[0]], [cleaned_quotes[-1]]
+
+    # C. 嘗試使用經典 ASCII 單引號 / 雙引號備用 matcher
+    double_quotes = re.findall(r'"([^"]{2,80})"', desc)
     if double_quotes:
-        if change_type == "added":
-            return [], double_quotes
-        elif change_type == "removed":
-            return double_quotes, []
-        else:
-            return [double_quotes[0]], [double_quotes[-1]]
+        cleaned_dq = [q.strip() for q in double_quotes if _is_valid_search_term(q)]
+        if cleaned_dq:
+            if change_type == "added":
+                return [], cleaned_dq
+            elif change_type == "removed":
+                return cleaned_dq, []
+            else:
+                return [cleaned_dq[0]], [cleaned_dq[-1]]
 
-    # 4. 嘗試單引號 'X' 格式（LLM 描述 added 時常用）
-    single_quotes = re.findall(r"'([^']{3,80})'", desc)
+    single_quotes = re.findall(r"'([^']{2,80})'", desc)
     if single_quotes:
-        if change_type == "added":
-            return [], single_quotes
-        elif change_type == "removed":
-            return single_quotes, []
-        else:
-            return [single_quotes[0]], [single_quotes[-1]]
+        cleaned_sq = [q.strip() for q in single_quotes if _is_valid_search_term(q)]
+        if cleaned_sq:
+            if change_type == "added":
+                return [], cleaned_sq
+            elif change_type == "removed":
+                return cleaned_sq, []
+            else:
+                return [cleaned_sq[0]], [cleaned_sq[-1]]
 
-    # 5. 對 added/removed，先用 entity findall 抓取所有可搜尋實體
+    # D. 嘗試從 Entity regex 抓取所有特殊實體
     entities = _ENTITY_RE.findall(desc)
     if entities:
-        # 過濾掉太短的（3 字以下純英文縮寫容易誤標）
-        entities = [e.strip() for e in entities if len(e.strip()) >= _MIN_SEARCH_LEN]
+        entities = [e.strip() for e in entities if _is_valid_search_term(e)]
     if entities:
         if change_type == "added":
             return [], entities
         elif change_type == "removed":
             return entities, []
-        elif change_type in ("modified", "replaced"):
+        elif change_type in ("modified", "replaced", "version", "reorder"):
             return entities, entities
 
-    # 6. 對 added/removed，從描述提取關鍵詞（去掉「新增」「刪除」等動詞前綴）
+    # E. 經典兜底：從描述提取單一關鍵詞
     clean = re.sub(
-        r"^(?:新增了?|刪除了?|移除了?|增加了?|添加了?|補充了?)[：:：\s]*",
+        r"^(?:新增了?|刪除了?|移受到了?|增加了?|添加了?|補充了?)[：:：\s]*",
         "", desc
     ).strip()
     clean = re.split(r"[（(,，：:嚗]", clean)[0].strip()
     clean = re.sub(r"\s*(?:規範|說明|定義|內容|資訊|流程|程序|標準|要求|設定)$", "", clean).strip()
     snippet = _clean_term(clean[:60].strip())
-    if len(snippet) >= _MIN_SEARCH_LEN:
+    if _is_valid_search_term(snippet):
         if change_type == "removed":
             return [snippet], []
         elif change_type == "added":
@@ -147,7 +250,7 @@ def _search_in_page(pdf_path: Path, page_index: int, text: str, dpi: float) -> l
     2. 找不到時，正規化空白後再試
     3. 還找不到時，用 TEXT_INHIBIT_SPACES flag（忽略空白）再試
     """
-    if not text or len(text) < _MIN_SEARCH_LEN:
+    if not text or not _is_valid_search_term(text):
         return []
     scale = dpi / 72.0
     # 正規化空白（多個空格合為一個）
@@ -171,7 +274,7 @@ def _search_in_page(pdf_path: Path, page_index: int, text: str, dpi: float) -> l
             words = normalized.split()
             for n_words in range(len(words) - 1, 1, -1):
                 shorter = " ".join(words[:n_words])
-                if len(shorter) >= _MIN_SEARCH_LEN:
+                if _is_valid_search_term(shorter):
                     rects = page.search_for(shorter)
                     if rects:
                         break
