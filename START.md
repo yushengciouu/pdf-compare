@@ -4,11 +4,21 @@
 
 > 以下指令在 `backend/` 目錄內執行
 
+### 1. 首次建立環境（日常啟動免執行此步驟）
+
 ```powershell
 cd backend
-python -m venv .venv
+# 建立虛擬環境（若預設 python 版本不穩，建議指定 python3.11）
+python3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+```
+
+### 2. 啟動服務（非首次安裝，日常直接執行此步驟即可）
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
 uvicorn app.main:app --reload --port 8000
 ```
 
