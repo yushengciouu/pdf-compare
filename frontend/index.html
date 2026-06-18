@@ -478,6 +478,41 @@
           grid-template-columns: 1fr;
         }
       }
+
+      /* 「跳至最上方」懸浮按鈕樣式 */
+      .scroll-to-top-btn {
+        position: fixed;
+        right: 24px;
+        bottom: 24px;
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        background: var(--accent); /* 使用原本定義的藍色主題色 */
+        color: #ffffff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        cursor: pointer;
+        z-index: 1000;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.3s ease, visibility 0.3s ease, transform 0.2s ease;
+        border: none;
+        outline: none;
+      }
+
+      /* 當有 show class 時顯示 */
+      .scroll-to-top-btn.show {
+        opacity: 1;
+        visibility: visible;
+      }
+
+      /* 游標懸停時的效果 */
+      .scroll-to-top-btn:hover {
+        transform: translateY(-4px);
+        background: #06509b; /* 稍微深一點的藍色色調 */
+      }
     </style>
   </head>
   <body>
@@ -563,6 +598,13 @@
         </section>
 
       </section>
+
+      <!-- 跳至最上方按鈕 -->
+      <button id="scrollToTopBtn" class="scroll-to-top-btn" title="跳至最上方">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="18 15 12 9 6 15"></polyline>
+        </svg>
+      </button>
     </main>
 
     <script>
@@ -1018,6 +1060,27 @@
       applyHideReorder();
       applyHideVersion();
       analyzeBtn.addEventListener("click", runAnalyze);
+
+      // 「跳至最上方」按鈕顯示與隱藏及滾動邏輯
+      const scrollToTopBtn = document.getElementById("scrollToTopBtn");
+
+      // 監聽網頁滾動
+      window.addEventListener("scroll", () => {
+        // 當網頁滾動高度超過 300px 時顯示按鈕，否則隱藏
+        if (window.scrollY > 300) {
+          scrollToTopBtn.classList.add("show");
+        } else {
+          scrollToTopBtn.classList.remove("show");
+        }
+      });
+
+      // 點擊按鈕時，平滑移動至頂端
+      scrollToTopBtn.addEventListener("click", () => {
+        window.scrollTo({
+          top: 0,
+          behavior: "smooth"
+        });
+      });
     </script>
   </body>
 </html>
