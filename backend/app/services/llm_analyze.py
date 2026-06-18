@@ -491,14 +491,23 @@ def _build_prompt(
 而非真正的新增內容。
 
 在對任何「新增頁（inserted）」、「刪除頁（deleted）」或「配對頁中的 added/removed 變更」下結論前，請先執行以下步驟：
-1. 查閱 user 訊息開頭的「全文頁面摘要索引」（B###=舊版各頁摘要，A###=新版各頁摘要）
-2. 若槽位頭部出現【頁面重排偵測警告】，務必優先執行下述步驟 3
-3. 【關鍵步驟】對 diff 中每一行以「+」開頭的段落（包含章節號碼如 5.2.5），逐一在【舊版鄰頁文字】中搜尋：
-   - 若該章節號碼或段落內容已出現在任何一個【舊版鄰頁文字（第 N 頁）】中 → 該段落是「頁面重排」，不是新增，**禁止**列為 added，改列為 modified（描述：頁面重排，內容源自舊版第 N 頁）或直接忽略
-   - 只有當該章節號碼、段落首句在所有【舊版鄰頁文字】中都找不到時，才能列為 added
-4. 對「新增頁」或「配對頁中的 added 內容」：搜尋其關鍵文字（章節號碼、段落首句）是否已出現在舊版索引（B###）中的某頁 → 若有，則該內容極可能是「頁面位移」而非真正的新增，summary 中應說明「內容源自舊版第 N 頁，可能為頁面位移」，importance 降為 low
-5. 對「刪除頁」或「配對頁中的 removed 內容」：搜尋其關鍵文字是否已出現在新版索引（A###）中的某頁 → 若有，則該內容極可能是「頁面位移」而非真正的刪除，summary 中應說明「內容仍存在於新版第 N 頁，可能為頁面位移」，importance 降為 low
-6. 只有在確認整份文件的另一版本中完全找不到相似內容時，才能判斷為真正的新增或刪除
+1. 查閱 user 訊息開頭的「全文頁面摘要索引」（B###=舊版各頁摘要，A###=新版各頁摘要）。
+2. 許多所謂刪除或新增可能僅僅是「跨頁溢出」（即上一頁文字流動到了下一頁）。
+3. 【關鍵步驟 - 判斷跨頁與槽位溢出】：對 diff 中每一行以「+」或「-」開頭的段落或章節（如 5.5.6 OQC 檢驗之說明），請優先對照前後相鄰槽位（Slot N-1, Slot N+1）的文字：
+   - 若段落內容同時在一個槽位被標為 `-` (刪除) 且在相鄰槽位被標為 `+` (新增) → 這代表純粹的跨頁溢出或頁面重排，**禁止**將其判定為實質刪除（removed）或實質新增（added）！
+   - 請將此類項目歸類為 category: "reorder"（描述：因頁面重排、文字流動而溢出至相鄰頁面，無實質改變），重要度設為 low，或直接忽略不提。
+4. 【配對頁中的 added 內容 / 新增頁（非目錄）】：對「配對頁（paired）」中產生的實質新增內容、或是「新增頁（inserted，且該頁內容非目錄）」：搜尋其關鍵文字（章節號碼、段落首句）是否單純因偏移而已出現在舊版索引（B###）中的相鄰頁 → 若是，則該內容極可能是「頁面位移」而非真正的新增。
+   - 注意：如果該頁的內容是「目錄（Table of Contents）」，則**絕不**進行此類跨頁位移判定！目錄中出現別的頁面的章節標題是完全正常的，絕不能判定為頁面位移或頁面重排。
+5. 【配對頁中的 removed 內容 / 刪除頁（非目錄）】：同理，對「配對頁（paired）」中的刪除內容或「刪除頁（deleted，非目錄）」：搜尋其關鍵文字是否已出現在新版索引（A###）中 → 若是，極可能是跨頁位移。
+   - 同樣，如果內容是「目錄（Table of Contents）」，**絕不**進行此類跨頁位移判定！
+6. 只有在確認整份文件的另一版本中完全找不到相似內容與相似語意描述時，才能判斷為真正的新增或刪除。
+
+《新增頁（inserted）與刪除頁（deleted）的特殊判定規則（極重要）》
+- 新增頁面/刪除頁面（物理上非配對槽位）：
+  - 【不要與配對頁（paired）混淆】：配對頁（before 與 after 皆有頁碼）才可能有「內容重排/頁碼遞移等 modified/reorder 變更」。
+  - 【新增頁面（inserted, before:-）】：該槽位在新版中是物理上新增的頁面，舊版完全不存在。因此，對於新增頁中的所有內容，**必須將其判定為新增（added）**，不可判定為「修改（modified）」或「重排（reorder）」。不論其內容是正文還是目錄的延續，只要其 state 為「新增頁（inserted）」，其產生的變更 type 必須是 `"added"`、category 必須是 `"content"`，絕對不可產生 `"type": "modified"` 或 `"category": "reorder"` 的變更！
+  - 【不要因目錄誤判重排】：如果新增頁（inserted）的內容是「目錄（Table of Contents）的延續」，它仍然是物理上新增的頁面！請將其總結為「新增目錄頁面，包含……」，並將變更項目設為 `"type": "added"`，**禁止**因為目錄中的部分章節標題在舊版其他內容頁面出現過，就將整頁或其內容歸類為「頁面重排（reorder）」或「modified」。
+  - 【刪除頁（deleted, after:-）】：邏輯同理。對於刪除頁中的所有內容，**必須將其判定為刪除（removed）**，不可判定為「重排（reorder）」或「修改（modified）」。其產生的變更 type 必須是 `"removed"`、category 必須是 `"content"`。
 
 《頁面重排舉例》
 - diff 中 '+' 出現「5.2.5 Before the release...」，【舊版鄰頁文字（第 14 頁）】也有「5.2.5 Before the release...」
@@ -963,18 +972,70 @@ def build_analyze_report(
                 )
             else:
                 llm_page = slot_to_llm.get(slot_no, {})
+                state = candidate["state"]
+                importance = llm_page.get("importance", "medium")
+                summary = llm_page.get("summary", "")
+                changes = llm_page.get("changes", [])
+
+                # 邏輯護欄：強制將新增/刪除頁的變更類型與類別修正為對應格式，確保不被誤判為重排/修改
+                if state == "inserted":
+                    if any(x in summary for x in ["頁面重排", "屬頁面重排"]):
+                        summary = summary.replace("屬頁面重排", "屬新增頁面").replace("頁面重排，與舊版目錄一致，屬頁面重排", "新增目錄頁面").replace("頁面重排，", "新增頁面，")
+                        if not summary or summary.strip() == "頁面重排":
+                            summary = "新增頁面內容"
+                    
+                    fixed_changes = []
+                    for change in changes:
+                        desc = change.get("description", "")
+                        desc = desc.replace("屬頁面重排", "為新增目錄").replace("頁面重排", "新增頁面")
+                        fixed_changes.append({
+                            "type": "added",
+                            "category": "content",
+                            "description": desc or "新增頁面內容"
+                        })
+                    if not fixed_changes:
+                        fixed_changes.append({
+                            "type": "added",
+                            "category": "content",
+                            "description": "新增頁面內容"
+                        })
+                    changes = fixed_changes
+
+                elif state == "deleted":
+                    if any(x in summary for x in ["頁面重排", "屬頁面重排"]):
+                        summary = summary.replace("屬頁面重排", "屬刪除頁面").replace("頁面重排，與新版目錄一致，屬頁面重排", "刪除頁面").replace("頁面重排，", "刪除頁面，")
+                        if not summary or summary.strip() == "頁面重排":
+                            summary = "刪除舊版頁面變更"
+                    
+                    fixed_changes = []
+                    for change in changes:
+                        desc = change.get("description", "")
+                        desc = desc.replace("屬頁面重排", "此頁已被刪除").replace("頁面重排", "刪除頁面")
+                        fixed_changes.append({
+                            "type": "removed",
+                            "category": "content",
+                            "description": desc or "刪除舊版頁面內容"
+                        })
+                    if not fixed_changes:
+                        fixed_changes.append({
+                            "type": "removed",
+                            "category": "content",
+                            "description": "刪除舊版頁面內容"
+                        })
+                    changes = fixed_changes
+
                 merged_pages.append(
                     {
                         "slot": slot_no,
-                        "state": candidate["state"],
+                        "state": state,
                         "before_page": candidate.get("before_page"),
                         "after_page": candidate.get("after_page"),
                         "image_diff": candidate.get("image_diff", 0.0),
                         "text_diff": candidate.get("text_diff", 0.0),
                         "reason": candidate.get("reason", ""),
-                        "importance": llm_page.get("importance", "medium"),
-                        "summary": llm_page.get("summary", ""),
-                        "changes": llm_page.get("changes", []),
+                        "importance": importance,
+                        "summary": summary,
+                        "changes": changes,
                     }
                 )
 
