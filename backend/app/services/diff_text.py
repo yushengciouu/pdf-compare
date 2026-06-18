@@ -48,7 +48,8 @@ _MIN_SEARCH_LEN = 3
 _ENTITY_RE = re.compile(
     r'\bF-\d{3,4}\b'                     # 表單 ID：F-180, F-181
     r'|Table\s+\d+[-.]?\d*'              # 表格參照：Table 5-2, Table 4-1
-    r'|\b\d+\.\d+(?:\.\d+)+'             # 多層節號：5.5.6, 5.4.2
+    r'|Figure\s+\d+[-.]?\d*'             # 圖表參照：Figure 5-2, Figure 1-3
+    r'|\b\d+\.\d+(?:\.\d+)*\b'           # 節號：5.12, 5.5.6, 5.4.2
     r'|\b[A-Z]{2,}[-_]\d{3,}'            # 料號/代號：W-317, MTK-123
     r'|\b[A-Z]{2,4}\b(?=\s*\()'          # 大寫縮寫後面緊跟括號說明：AST (Assembly test)
     , re.IGNORECASE
@@ -69,6 +70,42 @@ def _is_valid_search_term(term: str) -> bool:
     if has_cjk:
         return len(term) >= 2
     return len(term) >= _MIN_SEARCH_LEN
+
+
+def _clean_bilingual_or_page_indicator(term: str) -> str:
+    """
+    清理含有中英雙語或頁碼提示的描述。
+    1. 移除 (頁碼 XX)、(第 XX 頁)、(Page XX) 等頁碼提示。
+    2. 移除一些常見的描述前綴，如「目錄新增章節」、「List of Figures 新增」。
+    """
+    if not term:
+        return ""
+    # 1. 移除 (頁碼 XX)、(第 XX 頁)、(Page XX) 等頁碼暗示（支援空格，如 頁 碼 26）
+    term = re.sub(r'[\(（]\s*(?:頁\s*碼\s*\d*|第\s*\d+\s*頁|page\s*\d+)\s*[\)）]', '', term, flags=re.IGNORECASE)
+    
+    # 2. 移除一些常見的前綴
+    term = re.sub(r'^(?:目錄|圖表清單|List of Figures|List of Tables|版本歷史紀錄)?(?:新增了?|刪除了?|修改了?|更名為?|調整為?|更新為?|修正為?|變更為?|章節|：|:|\s+)*', '', term, flags=re.IGNORECASE)
+
+    return term.strip()
+
+
+def _extract_best_english_subsegment(term: str) -> str:
+    """
+    從一個中英混合的詞中，試圖提取出其中最長的一連串有意義的英數字/符號短語。
+    例如："5.12.1 Automotive Product 規範與條件" -> "5.12.1 Automotive Product"
+    """
+    if not term:
+        return ""
+    has_cjk = any('\u4e00' <= char <= '\u9fff' for char in term)
+    if not has_cjk:
+        return term
+    # 匹配英文字、數字、空格、點、連接符的片段
+    match = re.search(r'\b[a-zA-Z0-9\._\-]{3,}(?:\s+[a-zA-Z0-9\._\-]{2,})*\b', term)
+    if match:
+        cand = match.group().strip()
+        if len(cand) >= 4:
+            return cand
+    return term
 
 
 def _clean_extracted_term(term: str) -> str:
@@ -175,18 +212,92 @@ def _extract_list_terms(desc: str) -> list[str]:
 def _extract_search_terms(change: dict) -> tuple[list[str], list[str]]:
     """
     從 change dict 提取 (before_terms, after_terms)。
-    回傳空 list 表示無法提取。每個 list 可含多個搜尋詞。
+    會自動對提取出的詞進行中英雙語清洗，將混雜在中文描述中的英文短語過濾並抽取出來用於搜尋，
+    並在此過程中做橫線 (Hyphen/En-Dash) 的多型容錯。
+    """
+    before_raw, after_raw = _extract_search_terms_impl(change)
+    
+    final_before: list[str] = []
+    for t in before_raw:
+        cand = _extract_best_english_subsegment(t)
+        if _is_valid_search_term(cand) and cand not in final_before:
+            final_before.append(cand)
+            # 若含有橫線，多存一份不同種類橫線的版本作為備用
+            if any(dash in cand for dash in ["-", "–", "—"]):
+                for d in ["-", "–", "—"]:
+                    alt = re.sub(r'[-–—]', d, cand)
+                    if alt not in final_before:
+                        final_before.append(alt)
+            
+    final_after: list[str] = []
+    for t in after_raw:
+        cand = _extract_best_english_subsegment(t)
+        if _is_valid_search_term(cand) and cand not in final_after:
+            final_after.append(cand)
+            # 若含有橫線，多存一份不同種類橫線的版本作為備用
+            if any(dash in cand for dash in ["-", "–", "—"]):
+                for d in ["-", "–", "—"]:
+                    alt = re.sub(r'[-–—]', d, cand)
+                    if alt not in final_after:
+                        final_after.append(alt)
+            
+    return final_before, final_after
 
-    支援多種靈活的 description 格式：
-    1. 雙側有引號/括號的修改：「A」修改為「B」
-    2. 從/由 A 修改為 B
-    3. A 修改為 B
-    4. A → B
-    5. 並列清單式 (例如包含 A、B、C 等並列項目，可提取出全部的多個條件)
-    6. added/removed 類型之引號內容或 entity 列表
+
+def _extract_search_terms_impl(change: dict) -> tuple[list[str], list[str]]:
+    """
+    實際從 change dict 提取 (before_terms, after_terms) 的具體實現。
     """
     desc = change.get("description", "")
     change_type = change.get("type", "modified")
+
+    # 預先處理中英雙語或頁碼提示
+    desc = _clean_bilingual_or_page_indicator(desc)
+
+    # 快捷路徑：若清理後的描述不含中文字，且長度足夠，直接作為關鍵詞返回！
+    has_cjk = any('\u4e00' <= char <= '\u9fff' for char in desc)
+    if not has_cjk and len(desc) >= 4:
+        if change_type == "added":
+            return [], [desc]
+        elif change_type == "removed":
+            return [desc], []
+        else:
+            return [desc], [desc]
+
+    # B. 優先優先嘗試使用引號 findall（例如：新增 "A"、刪除 「B」）
+    quoted_matches = _ANY_QUOTES_RE.findall(desc)
+    if quoted_matches:
+        cleaned_quotes = [q.strip() for q in quoted_matches if _is_valid_search_term(q)]
+        if cleaned_quotes:
+            if change_type == "added":
+                return [], cleaned_quotes
+            elif change_type == "removed":
+                return cleaned_quotes, []
+            else:
+                return [cleaned_quotes[0]], [cleaned_quotes[-1]]
+
+    # C. 優先嘗試使用經典 ASCII 單引號 / 雙引號備用 matcher
+    double_quotes = re.findall(r'"([^"]{2,80})"', desc)
+    if double_quotes:
+        cleaned_dq = [q.strip() for q in double_quotes if _is_valid_search_term(q)]
+        if cleaned_dq:
+            if change_type == "added":
+                return [], cleaned_dq
+            elif change_type == "removed":
+                return cleaned_dq, []
+            else:
+                return [cleaned_dq[0]], [cleaned_dq[-1]]
+
+    single_quotes = re.findall(r"'([^']{2,80})'", desc)
+    if single_quotes:
+        cleaned_sq = [q.strip() for q in single_quotes if _is_valid_search_term(q)]
+        if cleaned_sq:
+            if change_type == "added":
+                return [], cleaned_sq
+            elif change_type == "removed":
+                return cleaned_sq, []
+            else:
+                return [cleaned_sq[0]], [cleaned_sq[-1]]
 
     # A. 針對並列清單式 (例如包含 A、B、C)
     # 若在文字中發現頓號、包含及多重並列，且為 added/removed，優先抽取多項
@@ -239,41 +350,6 @@ def _extract_search_terms(change: dict) -> tuple[list[str], list[str]]:
             if _is_valid_search_term(before) or _is_valid_search_term(after):
                 return [before] if before else [], [after] if after else []
 
-    # B. 嘗試使用引號 findall（例如：新增 "A"、刪除 「B」）
-    quoted_matches = _ANY_QUOTES_RE.findall(desc)
-    if quoted_matches:
-        cleaned_quotes = [q.strip() for q in quoted_matches if _is_valid_search_term(q)]
-        if cleaned_quotes:
-            if change_type == "added":
-                return [], cleaned_quotes
-            elif change_type == "removed":
-                return cleaned_quotes, []
-            else:
-                return [cleaned_quotes[0]], [cleaned_quotes[-1]]
-
-    # C. 嘗試使用經典 ASCII 單引號 / 雙引號備用 matcher
-    double_quotes = re.findall(r'"([^"]{2,80})"', desc)
-    if double_quotes:
-        cleaned_dq = [q.strip() for q in double_quotes if _is_valid_search_term(q)]
-        if cleaned_dq:
-            if change_type == "added":
-                return [], cleaned_dq
-            elif change_type == "removed":
-                return cleaned_dq, []
-            else:
-                return [cleaned_dq[0]], [cleaned_dq[-1]]
-
-    single_quotes = re.findall(r"'([^']{2,80})'", desc)
-    if single_quotes:
-        cleaned_sq = [q.strip() for q in single_quotes if _is_valid_search_term(q)]
-        if cleaned_sq:
-            if change_type == "added":
-                return [], cleaned_sq
-            elif change_type == "removed":
-                return cleaned_sq, []
-            else:
-                return [cleaned_sq[0]], [cleaned_sq[-1]]
-
     # D. 嘗試從 Entity regex 抓取所有特殊實體
     entities = _ENTITY_RE.findall(desc)
     if entities:
@@ -323,6 +399,14 @@ def _search_in_page(pdf_path: Path, page_index: int, text: str, dpi: float) -> l
         page = doc[page_index]
         # 嘗試 1：原始搜尋
         rects = page.search_for(normalized)
+        # 嘗試 1.5：萬用橫線字元替換 (處理 Hyphen / En-Dash / Em-Dash 差異，如 Figure 1-3 變 Figure 1–3)
+        if not rects and any(dash in normalized for dash in ["-", "–", "—"]):
+            for dash in ["-", "–", "—"]:
+                alt_normalized = re.sub(r'[-–—]', dash, normalized)
+                if alt_normalized != normalized:
+                    rects = page.search_for(alt_normalized)
+                    if rects:
+                        break
         # 嘗試 2：忽略空白差異
         if not rects:
             try:
@@ -386,6 +470,12 @@ def search_changes_boxes(
     can_search_after  = (state != "deleted")  and (after_page_index  >= 0)
 
     for change in changes:
+        # 排除頁碼純粹遞移、偏移、重排等不需要標記出紅框的更動
+        category = change.get("category", "")
+        desc = change.get("description", "")
+        if category == "reorder" or "頁碼" in desc or "頁碼偏移" in desc or "頁碼遞移" in desc:
+            continue
+
         change_type = change.get("type", "modified")
         before_terms, after_terms = _extract_search_terms(change)
 

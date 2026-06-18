@@ -6,8 +6,10 @@
 
 ## 方案 A：日常更新與部署（原本的環境）
 
-如果你只想更新目前已經在運作的 `http://伺服器IP:8080`：
+如果你想更新目前已經在運作的 `http://伺服器IP:8080`：
 
+### 情況 1：直接拉取分支更新（平時最常用）
+如果你的伺服器已經切換好對應的分支（預設是 `feat/text-diff-highlight`）：
 1. **進入專案目錄：**
    ```bash
    cd /home/user/pro/pdf-compare
@@ -16,7 +18,26 @@
    ```bash
    git pull
    ```
-3. **重新建置與背景啟動：**
+3. **重新建置鏡像並重啟容器：**
+   ```bash
+   podman compose up -d --build
+   ```
+
+### 情況 2：如果需要精準指定更新的分支
+如果想在伺服器上切換特定分支或進行強制拉取（防止伺服器端代碼被意外改動導致 git 拉不下）：
+1. **進入專案目錄：**
+   ```bash
+   cd /home/user/pro/pdf-compare
+   ```
+2. **強制取回並覆蓋：**
+   ```bash
+   # 下載最新進度但不套用
+   git fetch --all
+   
+   # 強制將本地代碼覆蓋為 GitHub 上特定的最新進度
+   git reset --hard origin/feat/text-diff-highlight
+   ```
+3. **重新建置與啟動：**
    ```bash
    podman compose up -d --build
    ```
