@@ -509,6 +509,16 @@ def _build_prompt(
   - 【不要因目錄誤判重排】：如果新增頁（inserted）的內容是「目錄（Table of Contents）的延續」，它仍然是物理上新增的頁面！請將其總結為「新增目錄頁面，包含……」，並將變更項目設為 `"type": "added"`，**禁止**因為目錄中的部分章節標題在舊版其他內容頁面出現過，就將整頁或其內容歸類為「頁面重排（reorder）」或「modified」。
   - 【刪除頁（deleted, after:-）】：邏輯同理。對於刪除頁中的所有內容，**必須將其判定為刪除（removed）**，不可判定為「重排（reorder）」或「修改（modified）」。其產生的變更 type 必須是 `"removed"`、category 必須是 `"content"`。
 
+《重排與實質內容變更並存判定規則（極重要）》
+- 即使某個配對槽位（paired）因為文件排版、跨頁位移等原因整體發生了重排（如舊版第 47 頁的內容被移動至新版第 54 頁），你【絕對不能】因為該頁有大量重排的內容，就直接下結論為「純頁面重排、無實質更動」而漏掉裡面的重要細節！
+- 只要在該頁面的文字差異（unified diff）中，看見了任何實質性的新增、刪除或修改（例如在 5.15.5 Advanced Package 規範中：新增了參考文件 / W-333 For 2.5D and 3D Device OSAT Qualification Working Instruction，或者修改了數字、修訂了規格描述），該槽位的重要度就【必須】設為 "high" 或 "medium"，並且寫出具體的實質變動。
+- 對於這類重排與實質變更並存的槽位：
+  1. 在 summary 中清楚、完整指出兩者，例如：「頁面位移與內容修訂，5.15.5 節新增參考文件 W-333。」
+  2. 在 changes 中，你【必須同時】輸出多個變更，不可合併成一條或省略實質變更！
+     - 輸出實質內容變更一條：`{"type": "added"|"modified", "category": "content", "description": "在 5.15.5 規範中新增參考文件 W-333 For 2.5D and 3D Device OSAT Qualification Working Instruction"}`
+     - 輸出頁碼編排變更一條：`{"type": "modified", "category": "reorder", "description": "頁碼從 47 變更為 54（頁面重排）"}`
+- 頁面整體移位（reorder）與區域性實質內容變更（content）是【並存的，完全不排斥的】！若因為重排而漏掉具體新加入的文件、數值或關鍵條例，將被視為【嚴重漏判】。
+
 《頁面重排舉例》
 - diff 中 '+' 出現「5.2.5 Before the release...」，【舊版鄰頁文字（第 14 頁）】也有「5.2.5 Before the release...」
   → 這是頁面重排，不能列為 added，應列為 modified（page reflow）或忽略
