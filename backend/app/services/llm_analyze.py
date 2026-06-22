@@ -146,8 +146,8 @@ def _make_text_diff(before_text: str, after_text: str) -> str:
     if not diff_lines:
         return "(文字內容無差異)"
 
-    # 限制總長度，避免 token 爆炸
-    MAX_CHARS = 3500
+    # 限制總長度，避免 token 爆炸（增至 15000 以確保目錄、圖表清單及大篇幅文字完整傳入不被截斷）
+    MAX_CHARS = 15000
     result = "\n".join(diff_lines)
     if len(result) > MAX_CHARS:
         result = result[:MAX_CHARS] + "\n...(文字差異過長，已截斷)"
