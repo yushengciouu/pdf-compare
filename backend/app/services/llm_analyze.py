@@ -641,7 +641,7 @@ def _dump_llm_debug(messages: list[dict], settings: Settings, raw_response: str 
     若提供 raw_response，一併存為 response.txt。
     回傳 dump 目錄路徑。
     """
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
     debug_root = settings.storage_root / "llm_debug" / ts
     debug_root.mkdir(parents=True, exist_ok=True)
 
@@ -859,9 +859,25 @@ def _extract_match_candidates(desc: str) -> list[str]:
         # 去除全數字或太短的
         if len(trimmed) >= 5 and not trimmed.isdigit() and len(re.sub(r"\D", "", trimmed)) != len(trimmed):
             candidates.append(trimmed)
+            # 拆分空格，提取單獨單字
+            sub_parts = re.split(r'\s+', trimmed)
+            if len(sub_parts) > 1:
+                for sp in sub_parts:
+                    # 只有當單字是識別碼（含數字、連字號、底線、斜線，或為3字以上大寫縮寫如 SOP）才提取為單獨特徵
+                    is_identifier = (
+                        any(char.isdigit() for char in sp) or
+                        any(char in "-_/" for char in sp) or
+                        (sp.isupper() and len(sp) >= 3)
+                    )
+                    if is_identifier and len(sp) >= 3:
+                        candidates.append(sp)
+                # 排除純章節號，組合純英文片段（例如：Non-B2B Lots）
+                non_sec_parts = [sp for sp in sub_parts if not re.match(r'^\d+(?:\.\d+)+$', sp)]
+                if len(non_sec_parts) > 1:
+                    candidates.append(" ".join(non_sec_parts))
             
-    # 3. 提取連續中文字，長度 >= 5
-    chi_matches = re.findall(r"[\u4e00-\u9fff]{5,}", desc)
+    # 3. 提取連續中文字，長度 >= 4
+    chi_matches = re.findall(r"[\u4e00-\u9fff]{4,}", desc)
     for cm in chi_matches:
         candidates.append(cm.strip())
         
@@ -883,9 +899,9 @@ def _cross_match_and_correct_changes(
 ) -> list[dict]:
     """
     全域文字存在性覆核（Global Existence Cross-Check）
-    對於所有 AI 判定為新增 (added)、刪除 (removed) 的項目，利用全域文字查找來二次驗證：
-    - 若 type == 'added'，但其描述的核心關鍵字早就在 before_texts 的某一頁中存在，則將其修正為 modified/reorder (排版位移)。
-    - 若 type == 'removed'，但其描述的核心關鍵字在 after_texts 的某一頁中依然完好存在，則將其修正為 modified/reorder (排版位移)。
+    對於所有 AI 判定為新增 (added)、刪除 (removed)、修改 (modified) 的項目，利用全域文字查找來二次驗證：
+    - 若 type == 'added'/'modified'，但其描述的核心關鍵字早就在 before_texts 的某一頁中存在，則將其修正為 modified/reorder (排版位移)。
+    - 若 type == 'removed'/'modified'，但其描述的核心關鍵字在 after_texts 的某一頁中依然完好存在，則將其修正為 modified/reorder (排版位移)。
     """
     import re
 
@@ -901,19 +917,51 @@ def _cross_match_and_correct_changes(
         curr_after = page.get("after_page")    # 1-based or None
         my_slot = int(page["slot"])
         
-        # 收集相鄰插槽（距離 <= 2）之頁碼範圍，僅允許在相鄰頁面中尋找，防範跨度過大的全局誤判 (如：第 4 頁移動至第 61 頁、第 46 頁移動至第 3 頁)
+        # 1. 估算允許檢索的舊版與新版頁碼範圍
         allowed_before_pages = set()
-        allowed_after_pages = set()
-        for other_page in merged_pages:
-            other_slot = int(other_page["slot"])
-            if abs(other_slot - my_slot) <= 2:
-                bp = other_page.get("before_page")
-                ap = other_page.get("after_page")
+        if curr_before is not None:
+            # 當前已對應頁面附近正負 5 頁
+            for p_idx in range(max(1, curr_before - 5), min(len(before_texts) + 1, curr_before + 6)):
+                allowed_before_pages.add(p_idx)
+        else:
+            # 尋找最近之有 before_page 的槽位，以此為基準估算
+            closest_bp = None
+            closest_dist = 9999
+            for other in merged_pages:
+                bp = other.get("before_page")
                 if bp is not None:
-                    allowed_before_pages.add(int(bp))
+                    dist = abs(int(other["slot"]) - my_slot)
+                    if dist < closest_dist:
+                        closest_dist = dist
+                        closest_bp = bp
+            if closest_bp is not None:
+                for p_idx in range(max(1, closest_bp - 6), min(len(before_texts) + 1, closest_bp + 7)):
+                    allowed_before_pages.add(p_idx)
+            else:
+                allowed_before_pages = set(range(1, len(before_texts) + 1))
+
+        allowed_after_pages = set()
+        if curr_after is not None:
+            # 當前已對應頁面附近正負 5 頁
+            for p_idx in range(max(1, curr_after - 5), min(len(after_texts) + 1, curr_after + 6)):
+                allowed_after_pages.add(p_idx)
+        else:
+            # 尋找最近之有 after_page 的槽位，以此為基準估算
+            closest_ap = None
+            closest_dist = 9999
+            for other in merged_pages:
+                ap = other.get("after_page")
                 if ap is not None:
-                    allowed_after_pages.add(int(ap))
-        
+                    dist = abs(int(other["slot"]) - my_slot)
+                    if dist < closest_dist:
+                        closest_dist = dist
+                        closest_ap = ap
+            if closest_ap is not None:
+                for p_idx in range(max(1, closest_ap - 6), min(len(after_texts) + 1, closest_ap + 7)):
+                    allowed_after_pages.add(p_idx)
+            else:
+                allowed_after_pages = set(range(1, len(after_texts) + 1))
+
         changes = page.get("changes", [])
         if not changes:
             continue
@@ -923,7 +971,7 @@ def _cross_match_and_correct_changes(
             cat = change.get("category", "content")
             desc = change.get("description", "")
             
-            if t in ("added", "removed") and cat == "content":
+            if t in ("added", "removed", "modified") and cat == "content":
                 features = _extract_match_candidates(desc)
                 if not features:
                     continue
@@ -941,32 +989,48 @@ def _cross_match_and_correct_changes(
                         "equipment", "tester", "product", "system", "rule", "standard", "procedure", 
                         "management", "sample", "accessory", "inspection", "criteria", "case", "figure", "table",
                         "測試", "程式", "發布", "委測", "工作", "指示", "機台", "產品", "系統", "規範", "標準", 
-                        "程序", "管理", "樣檔", "配件", "檢驗", "案例", "圖表", "表格", "新增", "說明", "規定"
+                        "程序", "管理", "樣檔", "配件", "檢驗", "案例", "圖表", "表格", "新增", "說明", "規定",
+                        "參考文件", "參考資料", "工作指示", "作業說明", "詳細說明", "修訂內容", "變更內容", "新增內容",
+                        "刪除內容", "欄位描述", "欄位說明", "操作說明", "異常狀況", "處理方式", "重新開立", "進行確認",
+                        "條件描述", "量產流程", "標準流程", "osat", "mtk", "te", "dcc", "tprf", "lhs", "xml", "pdf",
+                        "sop", "str", "sen"
                     }
                     if len(f_lower) < 15 and f_lower in common_blacklist:
                         return True
                     # 如果整個特徵字串太短
-                    if len(f_lower) < 6:
+                    if len(f_lower) < 4:
                         return True
                     return False
 
                 valid_features = [f for f in features if not _is_invalid_feature(f)]
-                if not valid_features:
-                    continue
-
                 matched_page = None
-                if t == "added":
-                    # added 應在 before_texts 中尋找
+
+                # 2. 在舊版中尋找（針對 added 或 modified）
+                if t in ("added", "modified"):
                     matching_pages = []
-                    for p_idx, clean_p in enumerate(clean_before_pages, 1):
+                    for p_idx, raw_p in enumerate(before_texts, 1):
                         if p_idx not in allowed_before_pages:
                             continue
                         if curr_before is not None and p_idx == int(curr_before):
-                            continue
+                            continue  # 永遠跳過當前頁面
                         
+                        clean_p = clean_before_pages[p_idx - 1]
                         for f in valid_features:
                             clean_f = _clean_for_search(f)
-                            if len(clean_f) >= 8 and clean_f in clean_p:
+                            is_chinese = any('\u4e00' <= char <= '\u9fff' for char in clean_f)
+                            is_id = (
+                                any(char.isdigit() for char in f) or
+                                any(char in "-_/" for char in f) or
+                                (f.isupper() and len(f) >= 3)
+                            )
+                            if is_chinese:
+                                min_len = 5
+                            elif is_id:
+                                min_len = 4
+                            else:
+                                min_len = 8
+                                
+                            if len(clean_f) >= min_len and clean_f in clean_p:
                                 matching_pages.append(p_idx)
                                 break
                     
@@ -979,18 +1043,32 @@ def _cross_match_and_correct_changes(
                         change["category"] = "reorder"
                         change["description"] = f"因頁面排版位移，由舊版第 {matched_page} 頁移動至新版第 {curr_after or 'N/A'} 頁：{desc}"
 
-                elif t == "removed":
-                    # removed 應在 after_texts 中尋找
+                # 3. 在新版中尋找（針對 removed 或 modified）
+                if t in ("removed", "modified") and not matched_page:
                     matching_pages = []
-                    for p_idx, clean_p in enumerate(clean_after_pages, 1):
+                    for p_idx, raw_p in enumerate(after_texts, 1):
                         if p_idx not in allowed_after_pages:
                             continue
                         if curr_after is not None and p_idx == int(curr_after):
-                            continue
+                            continue  # 永遠跳過當前頁面
                         
+                        clean_p = clean_after_pages[p_idx - 1]
                         for f in valid_features:
                             clean_f = _clean_for_search(f)
-                            if len(clean_f) >= 8 and clean_f in clean_p:
+                            is_chinese = any('\u4e00' <= char <= '\u9fff' for char in clean_f)
+                            is_id = (
+                                any(char.isdigit() for char in f) or
+                                any(char in "-_/" for char in f) or
+                                (f.isupper() and len(f) >= 3)
+                            )
+                            if is_chinese:
+                                min_len = 5
+                            elif is_id:
+                                min_len = 4
+                            else:
+                                min_len = 8
+                                
+                            if len(clean_f) >= min_len and clean_f in clean_p:
                                 matching_pages.append(p_idx)
                                 break
 
@@ -1056,14 +1134,14 @@ def _deduplicate_cross_slot_reflows(merged_pages: list[dict]) -> list[dict]:
         s = re.sub(r"[^\w\u4e00-\u9fff]", "", s)
         return s.strip()
 
-    # 1. 抽取所有 added/removed 項的扁平清單，便於兩兩比對
+    # 1. 抽取所有 added/removed/modified 項的扁平清單，便於兩兩比對
     # 格式：(slot_no, change_index, change_dict, cleaned_text)
     items = []
     for page in merged_pages:
         slot_no = int(page["slot"])
         for idx, change in enumerate(page.get("changes", [])):
             t = change.get("type")
-            if t in ("added", "removed"):
+            if t in ("added", "removed", "modified"):
                 desc = change.get("description", "")
                 cleaned = _clean_desc(desc)
                 if len(cleaned) >= 4:  # 太短的字串（如單獨數字、單個字母）不進行對比，防誤殺
@@ -1089,7 +1167,7 @@ def _deduplicate_cross_slot_reflows(merged_pages: list[dict]) -> list[dict]:
             if abs(items[i]["slot"] - items[j]["slot"]) > 2:
                 continue
 
-            # 必須是一邊 added 一邊 removed 才能對沖
+            # 避免同類型項目對消
             if items[i]["type"] == items[j]["type"]:
                 continue
 
@@ -1100,9 +1178,22 @@ def _deduplicate_cross_slot_reflows(merged_pages: list[dict]) -> list[dict]:
                 items[i]["paired"] = True
                 items[j]["paired"] = True
 
-                # 確定哪個是 added (新版)，哪個是 removed (舊版)
-                add_item = items[i] if items[i]["type"] == "added" else items[j]
-                rem_item = items[i] if items[i]["type"] == "removed" else items[j]
+                # 確定哪個是新版目的端 (added/modified)，哪個是舊版來源端 (removed/modified)
+                if items[i]["type"] == "added":
+                    add_item = items[i]
+                    rem_item = items[j]
+                elif items[j]["type"] == "added":
+                    add_item = items[j]
+                    rem_item = items[i]
+                elif items[i]["type"] == "removed":
+                    rem_item = items[i]
+                    add_item = items[j]
+                elif items[j]["type"] == "removed":
+                    rem_item = items[j]
+                    add_item = items[i]
+                else:
+                    add_item = items[i]
+                    rem_item = items[j]
 
                 # 找到對應的頁碼資訊
                 add_page_info = next((p for p in merged_pages if int(p["slot"]) == add_item["slot"]), {})
@@ -1464,6 +1555,16 @@ def build_analyze_report(
         
         # 進行全文跨頁文字實體對照二檢二次校正（防範 H200 分批分析下的虛假新增/刪除）
         merged_pages = _cross_match_and_correct_changes(merged_pages, before_texts, after_texts)
+
+        # 過濾 category == "reorder" 的變更，不呈現在前端與報告中
+        filtered_pages = []
+        for page in merged_pages:
+            changes = page.get("changes", [])
+            filtered_changes = [c for c in changes if c.get("category") != "reorder"]
+            if filtered_changes:
+                page["changes"] = filtered_changes
+                filtered_pages.append(page)
+        merged_pages = filtered_pages
 
         # 建立 slot → changes 對照表，傳給 _persist_renders 做文字搜尋
         slot_to_changes: dict[int, list[dict]] = {
