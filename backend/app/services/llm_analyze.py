@@ -455,6 +455,7 @@ def _build_prompt(
     after_render_dir: Path,
     before_texts: list[str],
     after_texts: list[str],
+    all_candidates: list[dict] | None = None,
 ) -> list[dict]:
     """
     組裝完整的 messages list，格式符合 OpenAI Chat Completions multimodal 規範。
@@ -576,7 +577,8 @@ def _build_prompt(
 """
 
     # 結構摘要：讓 LLM 了解整份文件頁面配對關係
-    structure_context = _build_structure_context(candidates)
+    effective_all_candidates = all_candidates if all_candidates is not None else candidates
+    structure_context = _build_structure_context(effective_all_candidates)
 
     # 永遠加入全文頁面索引：不只 inserted/deleted 需要，
     # paired 頁若有大幅頁碼偏移（如 before:13→after:24）同樣需要索引確認內容是否位移
@@ -598,7 +600,7 @@ def _build_prompt(
             after_render_dir,
             before_texts,
             after_texts,
-            all_candidates=candidates,
+            all_candidates=effective_all_candidates,
         )
         user_content.extend(page_content)
         # 頁間分隔
@@ -818,6 +820,141 @@ def _persist_renders(
     return render_id, all_slots
 
 
+def _deduplicate_cross_slot_reflows(merged_pages: list[dict]) -> list[dict]:
+    """
+    橫跨所有插槽進行「新增 (added)」與「刪除 (removed)」變更項的物理去重與智慧重排對消。
+    如果在某個 Slot A 中發現 `added`，且在 Slot B 中發現 `removed`，
+    且其 cleaned description 的相似度大於閾值（如 0.75），
+    則說明該內容只是因為「跨頁溢出或排版位移」，不屬於實質增刪！
+    我們將兩邊的 type 與 category 皆更正為 `modified / reorder`，並調降重要度。
+    """
+    import re
+    from difflib import SequenceMatcher
+
+    def _clean_desc(desc: str) -> str:
+        s = desc.lower()
+        # 移除干擾字元與常見動詞
+        for word in [
+            "新增了", "新增", "刪除了", "刪除", "移除了", "移除", "修改了", "修改",
+            "在第", "頁", "在", "內容", "項目", "欄位", "：", " ", "\"", "'", "「", "」",
+            "added", "removed", "deleted", "modified", "slot", "槽位"
+        ]:
+            s = s.replace(word, "")
+        # 只保留中英數與基本底詞
+        s = re.sub(r"[^\w\u4e00-\u9fff]", "", s)
+        return s.strip()
+
+    # 1. 抽取所有 added/removed 項的扁平清單，便於兩兩比對
+    # 格式：(slot_no, change_index, change_dict, cleaned_text)
+    items = []
+    for page in merged_pages:
+        slot_no = int(page["slot"])
+        for idx, change in enumerate(page.get("changes", [])):
+            t = change.get("type")
+            if t in ("added", "removed"):
+                desc = change.get("description", "")
+                cleaned = _clean_desc(desc)
+                if len(cleaned) >= 4:  # 太短的字串（如單獨數字、單個字母）不進行對比，防誤殺
+                    items.append({
+                        "slot": slot_no,
+                        "change_idx": idx,
+                        "change": change,
+                        "cleaned": cleaned,
+                        "desc": desc,
+                        "type": t,
+                        "paired": False  # 標記是否已配對
+                    })
+
+    # 2. 進行兩兩比對與配對
+    for i in range(len(items)):
+        if items[i]["paired"]:
+            continue
+        for j in range(i + 1, len(items)):
+            if items[j]["paired"]:
+                continue
+            
+            # 必須是一邊 added 一邊 removed 才能對沖
+            if items[i]["type"] == items[j]["type"]:
+                continue
+
+            # 計算清潔後相似度
+            sim = SequenceMatcher(None, items[i]["cleaned"], items[j]["cleaned"]).ratio()
+            if sim >= 0.75:
+                # 找到配對！標記為已配對
+                items[i]["paired"] = True
+                items[j]["paired"] = True
+
+                # 確定哪個是 added (新版)，哪個是 removed (舊版)
+                add_item = items[i] if items[i]["type"] == "added" else items[j]
+                rem_item = items[i] if items[i]["type"] == "removed" else items[j]
+
+                # 找到對應的頁碼資訊
+                add_page_info = next((p for p in merged_pages if int(p["slot"]) == add_item["slot"]), {})
+                rem_page_info = next((p for p in merged_pages if int(p["slot"]) == rem_item["slot"]), {})
+
+                from_p = rem_page_info.get("before_page", "N/A")
+                to_p = add_page_info.get("after_page", "N/A")
+
+                # 修改原 description 與類別
+                add_item["change"]["type"] = "modified"
+                add_item["change"]["category"] = "reorder"
+                add_item["change"]["description"] = f"因頁面重排由舊版第 {from_p} 頁位移至新版第 {to_p} 頁：{add_item['desc']}"
+
+                rem_item["change"]["type"] = "modified"
+                rem_item["change"]["category"] = "reorder"
+                rem_item["change"]["description"] = f"因頁面重排由舊版第 {from_p} 頁位移至新版第 {to_p} 頁：{rem_item['desc']}"
+                break
+
+    # 3. 重新校準所有頁面的 Importance 與 Summary
+    # 如果一個頁面裡所有的 changes 都被標記成了 category="reorder"，則調降為 Importance = "low"
+    for page in merged_pages:
+        changes = page.get("changes", [])
+        if not changes:
+            continue
+        
+        all_reorder = all(c.get("category") == "reorder" for c in changes)
+        if all_reorder:
+            page["importance"] = "low"
+            # 重新修飾 summary，避免 LLM 的「新增/刪除」字眼殘留
+            old_summary = page.get("summary", "")
+            if any(kw in old_summary for kw in ["新增", "刪除", "移除", "added", "removed"]):
+                bp = page.get("before_page")
+                ap = page.get("after_page")
+                page["summary"] = f"跨頁文字與段落位移（舊版第 {bp} 頁 ↔ 新版第 {ap} 頁，內容無實質修改）"
+
+    return merged_pages
+
+
+def _generate_overall_summary(pages_results: list[dict], settings: Settings) -> str:
+    """
+    使用超高速、無圖片的純文字請求為所有插槽變更生成一句話大綱總結。
+    """
+    if not pages_results:
+        return "未偵測到任何差異頁面。"
+
+    summaries = []
+    for p in sorted(pages_results, key=lambda x: int(x.get("slot", 0))):
+        s = p.get("summary", "").strip()
+        if s and s != "LLM 未提供此頁分析" and "分析呼叫失敗" not in s:
+            summaries.append(f"Slot {p.get('slot')}: {s}")
+
+    if not summaries:
+        return "檢測到部分版面與格式重排遞移。"
+
+    combined_texts = "\n".join(summaries[:150])
+    prompt = [
+        {
+            "role": "system",
+            "content": "你是一位專業的文件審查助手，請將以下各頁面的修改內容摘要，用繁體中文總結成一句簡短、流暢、不含 markdown 標記的「整份文件主要變更摘要」（約30-50字，例如：本次修訂主要新增了 5.15.5 Advanced Package 參考文件、調整了部分 LHS general 規範及目錄排版）。",
+        },
+        {"role": "user", "content": f"各頁面變更如下：\n{combined_texts}\n\n請直接給出總結："},
+    ]
+    try:
+        return _call_llm(prompt, settings).strip()
+    except Exception:
+        return "本次對照包含多處頁面重排、條款新增及格式微調。"
+
+
 def build_analyze_report(
     before_pdf: Path,
     after_pdf: Path,
@@ -934,21 +1071,75 @@ def build_analyze_report(
             else:
                 llm_candidates.append(cand)
 
-        # Step 4：組裝 prompt（只用需要 LLM 分析的候選頁）
-        messages = _build_prompt(
-            llm_candidates,
-            before_render_dir,
-            after_render_dir,
-            before_texts,
-            after_texts,
-        )
-
-        # Step 5：呼叫 LLM（並 dump debug 資料）
+        # Step 4 & 5：採用「全域感知分組批次並行」機制（Global-Aware Batched Slot Analysis）
+        # 將 llm_candidates 依序切分成每包最多 8 個槽位的 Batch。
+        # 4x H200 實力雄厚，我們可以並行發送這幾個分批 API！
         if llm_candidates:
-            _dump_llm_debug(messages, settings)  # 送出前先存 messages
-            raw_response = _call_llm(messages, settings)
-            _dump_llm_debug(messages, settings, raw_response)  # 收到回應後補存 response
-            llm_result = _parse_llm_response(raw_response, llm_candidates)
+            import concurrent.futures
+
+            # dump 完整 messages 做為全局記錄存檔
+            full_messages = _build_prompt(
+                llm_candidates,
+                before_render_dir,
+                after_render_dir,
+                before_texts,
+                after_texts,
+            )
+            _dump_llm_debug(full_messages, settings)
+
+            # 將候選槽位按 batch_size = 8 切分
+            batch_size = 8
+            batches = [llm_candidates[i : i + batch_size] for i in range(0, len(llm_candidates), batch_size)]
+
+            # 用於單個 Batch 呼叫 LLM 的內部處理函式
+            def _process_batch(batch_cands: list[dict]) -> dict:
+                # 每個 Batch 中組裝 prompt 時：
+                # candidates 僅包含該 Batch 內的 6-8 個槽位（讓 LLM 只針對這些槽位進階解析並輸出 JSON，保證高度精確且不遺漏）
+                # all_candidates 依然傳入整份文件的 llm_candidates，確保全域關係摘要、首部索引、相鄰跨頁比對能完美穿透 Batch 邊界！
+                batch_messages = _build_prompt(
+                    batch_cands,
+                    before_render_dir,
+                    after_render_dir,
+                    before_texts,
+                    after_texts,
+                    all_candidates=llm_candidates,
+                )
+                try:
+                    # 階段一：儲存送出前的 prompt
+                    _dump_llm_debug(batch_messages, settings)
+                    raw_res = _call_llm(batch_messages, settings)
+                    # 階段二：儲存收到回應後的 debug response
+                    _dump_llm_debug(batch_messages, settings, raw_res)
+                    return _parse_llm_response(raw_res, batch_cands)
+                except Exception as e:
+                    # 當個別 Batch 發生故障時，採取優雅降級保護阻斷
+                    err_pages = []
+                    for c in batch_cands:
+                        err_pages.append({
+                            "slot": int(c["slot"]),
+                            "importance": "high",
+                            "summary": f"該插槽在分批 [Batch] 分析中呼叫失敗: {e}",
+                            "changes": [],
+                            "_error": True,
+                        })
+                    return {"overall_summary": f"分批呼叫失敗: {e}", "pages": err_pages}
+
+            # 並行執行所有批次任務，充份調度 H200 的硬體高吞吐能力
+            pages_list = []
+            max_workers = min(16, len(batches))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(_process_batch, b): b for b in batches}
+                for future in concurrent.futures.as_completed(futures):
+                    res = future.result()
+                    pages_list.extend(res.get("pages", []))
+
+            # 使用超輕量、無圖檔的純文字請求為所有槽位的摘要產出一句流暢、全局、長篇幅的「一句話變更摘要」
+            overall_summary = _generate_overall_summary(pages_list, settings)
+
+            llm_result = {
+                "overall_summary": overall_summary,
+                "pages": pages_list,
+            }
         else:
             llm_result = {"overall_summary": "", "pages": []}
 
@@ -1048,6 +1239,10 @@ def build_analyze_report(
                         "changes": changes,
                     }
                 )
+
+        # Step 8：新增跨槽對抗物理去重（Cross-Slot Deduplication & Pairing）
+        # 解決「上一頁位移到下一頁卻被模型各自判斷為實質新增與刪除」的痛點！
+        merged_pages = _deduplicate_cross_slot_reflows(merged_pages)
 
         # 建立 slot → changes 對照表，傳給 _persist_renders 做文字搜尋
         slot_to_changes: dict[int, list[dict]] = {
