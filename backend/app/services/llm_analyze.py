@@ -913,6 +913,10 @@ def _cross_match_and_correct_changes(
     clean_after_pages = [_clean_for_search(t) for t in after_texts]
 
     for page in merged_pages:
+        # 跳過結構性新增或刪除的頁面（因為它們是全新/全刪的版面，其內的文字即使和舊版某處重疊，也不屬於排版位移）
+        if page.get("state") in ("inserted", "deleted"):
+            continue
+
         curr_before = page.get("before_page")  # 1-based or None
         curr_after = page.get("after_page")    # 1-based or None
         my_slot = int(page["slot"])
