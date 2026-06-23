@@ -921,6 +921,32 @@ def _cross_match_and_correct_changes(
         curr_after = page.get("after_page")    # 1-based or None
         my_slot = int(page["slot"])
         
+        # 跳過版本歷史紀錄與目錄等元數據/索引頁面，因為這些頁面本身就是對全文內容的索引/摘要引用，
+        # 會包含其他章節的名稱/編號，容易被誤判為排版位移(reorder)。
+        is_metadata_page = False
+        page_text_lower = ""
+        
+        # 檢查當前頁面或其前導頁碼（向前回溯至多 3 頁），以確保留續頁面也能被正確認定為元數據/索引頁面
+        check_before_indices = range(max(1, curr_before - 3), curr_before + 1) if curr_before is not None else []
+        check_after_indices = range(max(1, curr_after - 3), curr_after + 1) if curr_after is not None else []
+        
+        for idx in check_before_indices:
+            if 1 <= idx <= len(before_texts):
+                page_text_lower += before_texts[idx - 1].lower()
+        for idx in check_after_indices:
+            if 1 <= idx <= len(after_texts):
+                page_text_lower += after_texts[idx - 1].lower()
+
+        metadata_keywords = [
+            "version history", "revision history", "變更歷史", "修訂歷史", "歷史紀錄", "歷史記錄",
+            "table of contents", "目錄", "索引", "contents"
+        ]
+        if any(keyword in page_text_lower for keyword in metadata_keywords):
+            is_metadata_page = True
+
+        if is_metadata_page:
+            continue
+        
         # 1. 估算允許檢索的舊版與新版頁碼範圍
         allowed_before_pages = set()
         if curr_before is not None:
