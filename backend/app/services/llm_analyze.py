@@ -1045,6 +1045,7 @@ def _cross_match_and_correct_changes(
                             continue  # 永遠跳過當前頁面
                         
                         clean_p = clean_before_pages[p_idx - 1]
+                        matched_count = 0
                         for f in valid_features:
                             clean_f = _clean_for_search(f)
                             is_chinese = any('\u4e00' <= char <= '\u9fff' for char in clean_f)
@@ -1061,8 +1062,19 @@ def _cross_match_and_correct_changes(
                                 min_len = 8
                                 
                             if len(clean_f) >= min_len and clean_f in clean_p:
-                                matching_pages.append(p_idx)
-                                break
+                                matched_count += 1
+                        
+                        # 避免單一特徵匹配導致的誤判（例如同時有新、舊項，被舊項單字匹配污染）
+                        # 當特徵數少時(<=2)需要全部吻合；特徵數多時比例需達 70% 以上才視為排版重排
+                        match_ratio = matched_count / len(valid_features) if valid_features else 0.0
+                        is_match_ok = False
+                        if len(valid_features) <= 2:
+                            is_match_ok = (matched_count == len(valid_features))
+                        else:
+                            is_match_ok = (match_ratio >= 0.70)
+                            
+                        if is_match_ok:
+                            matching_pages.append(p_idx)
                     
                     if matching_pages:
                         # 優先取與當前 slot 的前後關聯頁碼最接近的
@@ -1083,6 +1095,7 @@ def _cross_match_and_correct_changes(
                             continue  # 永遠跳過當前頁面
                         
                         clean_p = clean_after_pages[p_idx - 1]
+                        matched_count = 0
                         for f in valid_features:
                             clean_f = _clean_for_search(f)
                             is_chinese = any('\u4e00' <= char <= '\u9fff' for char in clean_f)
@@ -1099,8 +1112,17 @@ def _cross_match_and_correct_changes(
                                 min_len = 8
                                 
                             if len(clean_f) >= min_len and clean_f in clean_p:
-                                matching_pages.append(p_idx)
-                                break
+                                matched_count += 1
+                        
+                        match_ratio = matched_count / len(valid_features) if valid_features else 0.0
+                        is_match_ok = False
+                        if len(valid_features) <= 2:
+                            is_match_ok = (matched_count == len(valid_features))
+                        else:
+                            is_match_ok = (match_ratio >= 0.70)
+                            
+                        if is_match_ok:
+                            matching_pages.append(p_idx)
 
                     if matching_pages:
                         # 優先取最接近的
