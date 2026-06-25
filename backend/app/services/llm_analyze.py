@@ -912,6 +912,23 @@ def _cross_match_and_correct_changes(
     clean_before_pages = [_clean_for_search(t) for t in before_texts]
     clean_after_pages = [_clean_for_search(t) for t in after_texts]
 
+    page_freq_cache = {}
+    def get_page_freq(clean_w: str) -> int:
+        if not clean_w:
+            return 999
+        if clean_w in page_freq_cache:
+            return page_freq_cache[clean_w]
+        
+        count = 0
+        for p in clean_before_pages:
+            if clean_w in p:
+                count += 1
+        for p in clean_after_pages:
+            if clean_w in p:
+                count += 1
+        page_freq_cache[clean_w] = count
+        return count
+
     for page in merged_pages:
         # 跳過結構性新增或刪除的頁面（因為它們是全新/全刪的版面，其內的文字即使和舊版某處重疊，也不屬於排版位移）
         if page.get("state") in ("inserted", "deleted"):
@@ -1053,7 +1070,8 @@ def _cross_match_and_correct_changes(
                         "confidential", "proprietary", "unauthorized", "reproduction", "disclosure", 
                         "reserved", "revision", "version", "subcontractor", "systems", "system",
                         "figure", "table", "field", "fields", "category", "categories", "detail", "details",
-                        "definition", "definitions", "example", "examples", "case", "cases", "scenario", "scenarios"
+                        "definition", "definitions", "example", "examples", "case", "cases", "scenario", "scenarios",
+                        "purpose", "purposes", "shipment", "shipments", "warehousing", "warehouse", "form", "forms"
                     }
                     for e in eng_segs:
                         e_low = e.lower().strip()
@@ -1106,11 +1124,24 @@ def _cross_match_and_correct_changes(
                         is_adjacent = curr_before is not None and abs(p_idx - int(curr_before)) <= 1
                         matched_fuzzy_count = sum(1 for tok in fuzzy_tokens if _clean_for_search(tok) in clean_p) if fuzzy_tokens else 0
                         
+                        # 專有高置信比對：針對獨特特有/罕見條款，在 2 頁內發生重排與位移（例如 Non-B2B Lots / 無帳貨批）
+                        # 若存在特定核心詞特色長度 >= 4，且在整份文檔範圍內的 Page Frequency <= 3（即為專屬/罕見條款），且在該鄰近頁出現，則視為排版位移（reorder）
+                        matched_specific_features = []
+                        if curr_before is not None and abs(p_idx - int(curr_before)) <= 2:
+                            for f in valid_features:
+                                clean_f = _clean_for_search(f)
+                                if len(clean_f) >= 4 and clean_f in clean_p:
+                                    if get_page_freq(clean_f) <= 3:
+                                        matched_specific_features.append(f)
+                        is_non_b2b_moved = len(matched_specific_features) >= 1
+                        
                         is_match_ok = False
-                        if is_adjacent:
+                        if is_non_b2b_moved:
+                            is_match_ok = True
+                        elif is_adjacent:
                             # 鄰近頁面（距離 <= 1）因文字流動（Spillover）極為自然，採用非常精準但寬鬆的判定，防止 LLM Paraphrase 導致誤判：
-                            # 1. 特徵吻合度 >= 45% (原本 3 個特徵只要中 2 個，或 9 個中 5 個就可以)
-                            # 2. 或者，重複的高強度 fuzzy 中英特徵數 >= 3 (如連續中 3 個 4 字中文 chunk，或中 1 個大單字 + 2 個 chunk)
+                            # 1. 特徵吻合度 >= 45%
+                            # 2. 或者，重複的高強度 fuzzy 中英特徵數 >= 3
                             is_match_ok = (match_ratio >= 0.45) or (matched_fuzzy_count >= 3)
                         else:
                             # 遠距離頁面判定：維持嚴格的 70% 限制以減少全域假匹配
@@ -1165,8 +1196,21 @@ def _cross_match_and_correct_changes(
                         is_adjacent = curr_after is not None and abs(p_idx - int(curr_after)) <= 1
                         matched_fuzzy_count = sum(1 for tok in fuzzy_tokens if _clean_for_search(tok) in clean_p) if fuzzy_tokens else 0
                         
+                        # 專有高置信比對：針對獨特特有/罕見條款，在 2 頁內發生重排與位移（例如 Non-B2B Lots / 無帳貨批）
+                        # 若存在特定核心詞特色長度 >= 4，且在整份文檔範圍內的 Page Frequency <= 3（即為專屬/罕見條款），且在該鄰近頁出現，則視為排版位移（reorder）
+                        matched_specific_features = []
+                        if curr_after is not None and abs(p_idx - int(curr_after)) <= 2:
+                            for f in valid_features:
+                                clean_f = _clean_for_search(f)
+                                if len(clean_f) >= 4 and clean_f in clean_p:
+                                    if get_page_freq(clean_f) <= 3:
+                                        matched_specific_features.append(f)
+                        is_non_b2b_moved = len(matched_specific_features) >= 1
+                        
                         is_match_ok = False
-                        if is_adjacent:
+                        if is_non_b2b_moved:
+                            is_match_ok = True
+                        elif is_adjacent:
                             is_match_ok = (match_ratio >= 0.45) or (matched_fuzzy_count >= 3)
                         else:
                             if len(valid_features) <= 2:
