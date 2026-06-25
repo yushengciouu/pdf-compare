@@ -1035,6 +1035,42 @@ def _cross_match_and_correct_changes(
                 valid_features = [f for f in features if not _is_invalid_feature(f)]
                 matched_page = None
 
+                # 提取 overlapping 4-character Chinese chunks 與 English words (長度 >= 4) 作為鄰頁強力 fuzzy 匹配特徵
+                def _get_fuzzy_tokens(text_str: str) -> list[str]:
+                    import re
+                    # 1. 中文 4 字滑動視窗
+                    chi_segs = re.findall(r'[\u4e00-\u9fff]{4,}', text_str)
+                    tokens = []
+                    for s in chi_segs:
+                        for idx_c in range(len(s) - 3):
+                            tokens.append(s[idx_c:idx_c+4])
+                    # 2. 英文長度 >= 5 的詞/識別碼（過濾掉常見通用/模板單字，防鄰近引用標題造成誤匹配）
+                    eng_segs = re.findall(r'[a-zA-Z0-9_\-\.]{5,}', text_str)
+                    generic_blacklist = {
+                        "working", "instruction", "qualification", "rules", "rule", "standard", "procedure", 
+                        "specification", "document", "requirements", "requirement", "product", "products",
+                        "reference", "references", "guideline", "guidelines", "manual", "manuals",
+                        "confidential", "proprietary", "unauthorized", "reproduction", "disclosure", 
+                        "reserved", "revision", "version", "subcontractor", "systems", "system",
+                        "figure", "table", "field", "fields", "category", "categories", "detail", "details",
+                        "definition", "definitions", "example", "examples", "case", "cases", "scenario", "scenarios"
+                    }
+                    for e in eng_segs:
+                        e_low = e.lower().strip()
+                        if e_low not in generic_blacklist:
+                            tokens.append(e_low)
+                    
+                    # 使用 set 去除重複的特徵 Token，避免單一詞彙（如 leading）重複出現在描述中多次累加，導致誤匹配
+                    seen_t = set()
+                    unique_tokens = []
+                    for tok in tokens:
+                        if tok not in seen_t:
+                            seen_t.add(tok)
+                            unique_tokens.append(tok)
+                    return unique_tokens
+
+                fuzzy_tokens = _get_fuzzy_tokens(desc)
+
                 # 2. 在舊版中尋找（針對 added 或 modified）
                 if t in ("added", "modified"):
                     matching_pages = []
@@ -1064,14 +1100,24 @@ def _cross_match_and_correct_changes(
                             if len(clean_f) >= min_len and clean_f in clean_p:
                                 matched_count += 1
                         
-                        # 避免單一特徵匹配導致的誤判（例如同時有新、舊項，被舊項單字匹配污染）
-                        # 當特徵數少時(<=2)需要全部吻合；特徵數多時比例需達 70% 以上才視為排版重排
                         match_ratio = matched_count / len(valid_features) if valid_features else 0.0
+                        
+                        # 計算輔助 fuzzy 匹配度（用於鄰近頁面精準校核）
+                        is_adjacent = curr_before is not None and abs(p_idx - int(curr_before)) <= 1
+                        matched_fuzzy_count = sum(1 for tok in fuzzy_tokens if _clean_for_search(tok) in clean_p) if fuzzy_tokens else 0
+                        
                         is_match_ok = False
-                        if len(valid_features) <= 2:
-                            is_match_ok = (matched_count == len(valid_features))
+                        if is_adjacent:
+                            # 鄰近頁面（距離 <= 1）因文字流動（Spillover）極為自然，採用非常精準但寬鬆的判定，防止 LLM Paraphrase 導致誤判：
+                            # 1. 特徵吻合度 >= 45% (原本 3 個特徵只要中 2 個，或 9 個中 5 個就可以)
+                            # 2. 或者，重複的高強度 fuzzy 中英特徵數 >= 3 (如連續中 3 個 4 字中文 chunk，或中 1 個大單字 + 2 個 chunk)
+                            is_match_ok = (match_ratio >= 0.45) or (matched_fuzzy_count >= 3)
                         else:
-                            is_match_ok = (match_ratio >= 0.70)
+                            # 遠距離頁面判定：維持嚴格的 70% 限制以減少全域假匹配
+                            if len(valid_features) <= 2:
+                                is_match_ok = (matched_count == len(valid_features))
+                            else:
+                                is_match_ok = (match_ratio >= 0.70)
                             
                         if is_match_ok:
                             matching_pages.append(p_idx)
@@ -1115,11 +1161,18 @@ def _cross_match_and_correct_changes(
                                 matched_count += 1
                         
                         match_ratio = matched_count / len(valid_features) if valid_features else 0.0
+                        
+                        is_adjacent = curr_after is not None and abs(p_idx - int(curr_after)) <= 1
+                        matched_fuzzy_count = sum(1 for tok in fuzzy_tokens if _clean_for_search(tok) in clean_p) if fuzzy_tokens else 0
+                        
                         is_match_ok = False
-                        if len(valid_features) <= 2:
-                            is_match_ok = (matched_count == len(valid_features))
+                        if is_adjacent:
+                            is_match_ok = (match_ratio >= 0.45) or (matched_fuzzy_count >= 3)
                         else:
-                            is_match_ok = (match_ratio >= 0.70)
+                            if len(valid_features) <= 2:
+                                is_match_ok = (matched_count == len(valid_features))
+                            else:
+                                is_match_ok = (match_ratio >= 0.70)
                             
                         if is_match_ok:
                             matching_pages.append(p_idx)
