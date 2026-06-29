@@ -1175,6 +1175,7 @@ def _cross_match_and_correct_changes(
                         
                         clean_p = clean_after_pages[p_idx - 1]
                         matched_count = 0
+                        matched_features_on_p = []
                         for f in valid_features:
                             clean_f = _clean_for_search(f)
                             is_chinese = any('\u4e00' <= char <= '\u9fff' for char in clean_f)
@@ -1192,6 +1193,7 @@ def _cross_match_and_correct_changes(
                                 
                             if len(clean_f) >= min_len and clean_f in clean_p:
                                 matched_count += 1
+                                matched_features_on_p.append(f)
                         
                         match_ratio = matched_count / len(valid_features) if valid_features else 0.0
                         
@@ -1221,7 +1223,37 @@ def _cross_match_and_correct_changes(
                                 is_match_ok = (matched_count == len(valid_features))
                             else:
                                 is_match_ok = (match_ratio >= 0.70)
+                        
+                        if is_match_ok and curr_before is not None:
+                            # 物理溯源校核（Physical Provenance Check）：
+                            # 既然被匹配為位移至新版的第 p_idx 頁，則這些被匹配到的特徵
+                            # 在該插槽舊版的原本來源頁（或相鄰一頁）中必須曾經存在過！
+                            # 否則，這只是新版對新章節/新參考名稱的獨立引用，絕不屬於原本有的排版跨頁位移。
+                            source_pages = [curr_before]
+                            if curr_before - 1 >= 1:
+                                source_pages.append(curr_before - 1)
+                            if curr_before + 1 <= len(before_texts):
+                                source_pages.append(curr_before + 1)
                             
+                            existed_in_source = False
+                            for bp_idx in source_pages:
+                                clean_bp = clean_before_pages[bp_idx - 1]
+                                bp_matched_count = 0
+                                for f in matched_features_on_p:
+                                    clean_f = _clean_for_search(f)
+                                    if clean_f in clean_bp:
+                                        bp_matched_count += 1
+                                
+                                if len(matched_features_on_p) > 0:
+                                    if bp_matched_count >= max(1, len(matched_features_on_p) * 0.5):
+                                        existed_in_source = True
+                                        break
+                                else:
+                                    existed_in_source = True
+                            
+                            if not existed_in_source:
+                                is_match_ok = False
+                        
                         if is_match_ok:
                             matching_pages.append(p_idx)
 
