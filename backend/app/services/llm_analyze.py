@@ -1133,7 +1133,9 @@ def _cross_match_and_correct_changes(
                                 if len(clean_f) >= 4 and clean_f in clean_p:
                                     if get_page_freq(clean_f) <= 3:
                                         matched_specific_features.append(f)
-                        is_non_b2b_moved = len(matched_specific_features) >= 1
+                        is_non_b2b_moved = len(matched_specific_features) >= 2 or (
+                            len(matched_specific_features) >= 1 and (match_ratio >= 0.25 or len(valid_features) <= 2)
+                        )
                         
                         is_match_ok = False
                         if is_non_b2b_moved:
@@ -1205,7 +1207,9 @@ def _cross_match_and_correct_changes(
                                 if len(clean_f) >= 4 and clean_f in clean_p:
                                     if get_page_freq(clean_f) <= 3:
                                         matched_specific_features.append(f)
-                        is_non_b2b_moved = len(matched_specific_features) >= 1
+                        is_non_b2b_moved = len(matched_specific_features) >= 2 or (
+                            len(matched_specific_features) >= 1 and (match_ratio >= 0.25 or len(valid_features) <= 2)
+                        )
                         
                         is_match_ok = False
                         if is_non_b2b_moved:
@@ -1591,11 +1595,8 @@ def build_analyze_report(
                     res = future.result()
                     pages_list.extend(res.get("pages", []))
 
-            # 使用超輕量、無圖檔的純文字請求為所有槽位的摘要產出一句流暢、全局、長篇幅的「一句話變更摘要」
-            overall_summary = _generate_overall_summary(pages_list, settings)
-
             llm_result = {
-                "overall_summary": overall_summary,
+                "overall_summary": "",
                 "pages": pages_list,
             }
         else:
