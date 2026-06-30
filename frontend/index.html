@@ -383,6 +383,7 @@
       }
       .analyze-changes li.filtered-hidden { display: none; }
       .analyze-item.all-changes-hidden { display: none; }
+      .analyze-item.no-changes { display: none; }
 
       /* LLM 分析後的 PDF 瀏覽器 */
       .analyze-browser {
@@ -920,14 +921,17 @@
             head.appendChild(jumpBtn);
             item.appendChild(head);
 
-            const summaryDiv = document.createElement("div");
-            summaryDiv.className = "analyze-summary-text";
-            summaryDiv.textContent = p.summary || "（無摘要）";
-            item.appendChild(summaryDiv);
+            if (p.summary && p.summary.trim()) {
+              const summaryDiv = document.createElement("div");
+              summaryDiv.className = "analyze-summary-text";
+              summaryDiv.textContent = p.summary;
+              item.appendChild(summaryDiv);
+            }
 
             const ul = document.createElement("ul");
             ul.className = "analyze-changes";
-            (p.changes || []).forEach((c) => {
+            const changesList = p.changes || [];
+            changesList.forEach((c) => {
               const li = document.createElement("li");
               li.className = c.type;
               li.dataset.fv = isVersionChangeItem(c) ? "1" : "0";
@@ -935,6 +939,10 @@
               ul.appendChild(li);
             });
             item.appendChild(ul);
+
+            if (changesList.length === 0) {
+              item.classList.add("no-changes");
+            }
 
             analyzeListEl.appendChild(item);
           });

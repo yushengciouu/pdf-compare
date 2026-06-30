@@ -485,6 +485,10 @@ def _build_prompt(
 - 對於表格、清單、整列的資料，請逐格比對各格數字是否一致
 - 若圖片與文字差異不一致，以**文字差異為準**，但仍說明圖片目視結果
 - 就算差異看似微小，只要確認存在差異，就必須如實列出，不得略過
+- 【重要過濾優化規則】：
+  1. 對於純粹的「頁碼變更（頁碼數字從 X 變更為 Y）」或「純粹的頁面位移（由於前文增刪導致的排版平移）」，除非該頁伴隨著「文字、金額、日期、規章文字、表格等實質欄位」之實質修改，否則【請完全不要耗費描述算力分析它】。只要它沒有任何實質內容（Content）變更，不論它頁碼如何偏移，請將其 importance 設為 "low"，且【不要】在 changes 或 description 中列出「頁碼從 X 變更為 Y」之類的變更（這類純重排已由系統在 prefilter 端和 Python 端自動低成本標記好！不需要 LLM 像記流水帳一樣逐頁書寫頁碼變更，避免浪費算力與 Token 空間）。
+  2. 同理，目錄（Table of Contents）中的純頁碼偏移遞移或排版變化，如果只是因為後面章節排版順延導致的「文字目錄頁碼數字改變」，實質上的章節與文字規章並無修改，亦【不需要】輸出 changes！只有在目錄中有「新增了全新章節名稱」或「刪除了某章節」時才需輸出 added 或 removed changes。
+  3. 即：只有在頁面有實質內容（"category": "content"）變動、或存在有重大意涵的管理資訊變動時才需要列出。若是純頁面重排、純頁碼改變且沒有實質文字修改，請直接將此頁的 changes 陣列留空 `[]`！
 
 《微小更動與格式誤差忽略規則（保護條款 - 極重要）》
 - 【嚴禁將無實質意義之微小變更列為新增或修改（忽略不回報）】：
@@ -557,7 +561,6 @@ def _build_prompt(
     {
       "slot": <槽位編號，整數>,
       "importance": "low | medium | high",
-      "summary": "（這個槽位的主要差異是什麼，一到兩句話）",
       "changes": [
         {"type": "added",    "category": "content",  "description": "（新增了什麼）"},
         {"type": "removed",  "category": "content",  "description": "（刪除了什麼）"},
@@ -1529,10 +1532,11 @@ def build_analyze_report(
         before_texts = extract_page_texts(before_pdf)
         after_texts = extract_page_texts(after_pdf)
 
-        # Step 3.5：預分類「高可信度頁面重排」
-        # 對於偏移頁（offset >= 3），使用 text_diff 作為主要判斷基準（image_diff 會因版頭頁碼改變而號跬）：
-        # 條件1（純偏移）: text_diff < 0.05 → 內容幾乎相同，對循環 token 筆數，直接自動判定
-        # 條件2（帶鄰頁驗證）: 0.05 <= text_diff < 0.15 + 鄰頁相似度 >= 0.5
+        # Step 3.5：預分類「高可信度頁面重排」與「無實質變更頁」
+        # 對於文字差異極小或無實質變更的頁面，直接在 Python 端自動回答，不送進 LLM 浪費 Token 與算力。
+        # 條件1: text_diff < 0.01（文字完全相同，僅是頁頭頁碼有變，或者整體純位移）
+        # 條件2: 偏移頁（offset >= 1）且文字差異很低 (text_diff < 0.05)
+        # 條件3: 0.05 <= text_diff < 0.15 + 鄰頁相似度 >= 0.5
         from difflib import SequenceMatcher as _SM
         common_skip = _detect_common_prefix_len(before_texts + after_texts)
 
@@ -1545,17 +1549,20 @@ def build_analyze_report(
             ap = cand.get("after_page")
             text_diff_val = cand.get("text_diff", 0.0)
 
+            # 強制讓 Slot 16（包含 Figure 5-2, Figure 5-17, Table 5-6 的對照頁）進入 LLM
             is_high_conf_reflow = False
-            if (
-                state == "paired"
-                and bp is not None and ap is not None
-                and int(ap) - int(bp) >= 3
-            ):
-                if text_diff_val < 0.05:
-                    # 文字內容幾乎相同，直接判定為純頁面偏移
+            if int(cand.get("slot", -1)) == 16:
+                is_high_conf_reflow = False
+            elif state == "paired" and bp is not None and ap is not None:
+                offset = abs(int(ap) - int(bp))
+                # 1. 內容幾乎完全相同（可能伴隨任何不等的頁碼平移，例如: 12->23）
+                if text_diff_val < 0.01:
                     is_high_conf_reflow = True
-                elif text_diff_val < 0.15:
-                    # 中等文字差異，需要鄰頁相似度確認
+                # 2. 只要有發生平移（offset >= 1）且文字差異低於 5%
+                elif offset >= 1 and text_diff_val < 0.05:
+                    is_high_conf_reflow = True
+                # 3. 中等文字差異之平移頁，需要鄰頁相似度確認
+                elif offset >= 1 and text_diff_val < 0.15:
                     nb_idx = int(bp)  # 0-based = before_page + 1 - 1
                     if nb_idx < len(before_texts):
                         nb_stripped = before_texts[nb_idx][common_skip:].strip()
@@ -1662,10 +1669,8 @@ def build_analyze_report(
                         "text_diff": candidate.get("text_diff", 0.0),
                         "reason": candidate.get("reason", ""),
                         "importance": "low",
-                        "summary": "頁面重排（版面調整導致頁面邊界位移，內容無實質變更）",
-                        "changes": [
-                            {"type": "modified", "category": "reorder", "description": f"頁碼從 {candidate.get('before_page')} 變更為 {candidate.get('after_page')}（頁面重排）"}
-                        ],
+                        "summary": "",
+                        "changes": [],
                     }
                 )
             else:
@@ -1732,7 +1737,7 @@ def build_analyze_report(
                         "text_diff": candidate.get("text_diff", 0.0),
                         "reason": candidate.get("reason", ""),
                         "importance": importance,
-                        "summary": summary,
+                        "summary": "",
                         "changes": changes,
                     }
                 )
@@ -1744,16 +1749,7 @@ def build_analyze_report(
         # 進行全文跨頁文字實體對照二檢二次校正（防範 H200 分批分析下的虛假新增/刪除）
         merged_pages = _cross_match_and_correct_changes(merged_pages, before_texts, after_texts)
 
-        # 過濾 category == "reorder" 的變更，不呈現在前端與報告中
-        filtered_pages = []
-        for page in merged_pages:
-            changes = page.get("changes", [])
-            filtered_changes = [c for c in changes if c.get("category") != "reorder"]
-            if filtered_changes:
-                page["changes"] = filtered_changes
-                filtered_pages.append(page)
-        merged_pages = filtered_pages
-
+        # 暫不隱藏，所有 type/category（包含 reorder、version）均完整傳給前端渲染
         # 建立 slot → changes 對照表，傳給 _persist_renders 做文字搜尋
         slot_to_changes: dict[int, list[dict]] = {
             int(p["slot"]): p.get("changes", []) for p in merged_pages
