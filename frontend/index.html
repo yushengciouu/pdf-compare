@@ -556,8 +556,6 @@
         <div class="status">任務 ID：<span id="job" class="mono">-</span></div>
         <div id="analyzeSection" style="margin-top: 10px; display: none;">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
-            <button id="hideReorderBtn" type="button" style="background:#475569;min-width:0;width:auto;padding:6px 14px;font-size:13px;" onclick="toggleHideReorder()">隱藏頁面重排</button>
-            <span id="hideReorderHint" style="font-size:12px;color:#637083;"></span>
             <button id="hideVersionBtn" type="button" style="background:#475569;min-width:0;width:auto;padding:6px 14px;font-size:13px;" onclick="toggleHideVersion()">隱藏版本號變更</button>
             <span id="hideVersionHint" style="font-size:12px;color:#637083;"></span>
           </div>
@@ -932,7 +930,6 @@
             (p.changes || []).forEach((c) => {
               const li = document.createElement("li");
               li.className = c.type;
-              li.dataset.fr = isReorderChangeItem(c) ? "1" : "0";
               li.dataset.fv = isVersionChangeItem(c) ? "1" : "0";
               li.textContent = `[${c.type}] ${c.description}`;
               ul.appendChild(li);
@@ -941,7 +938,6 @@
 
             analyzeListEl.appendChild(item);
           });
-          applyHideReorder();
           applyHideVersion();
           // 渲染 PDF 瀏覽器
           if (data.all_slots && data.all_slots.length) {
@@ -970,19 +966,7 @@
         scheduleAnalyzeSyncHeights();
       });
 
-      let hideReorderActive = false;
       let hideVersionActive = false;
-
-      // 判斷單一 change 項目是否為頁面重排類
-      function isReorderChangeItem(c) {
-        if (c.category === "reorder") return true;
-        // fallback：舊版資料無 category 時改用關鍵字
-        const desc = c.description || "";
-        return desc.includes("頁碼從") || desc.includes("頁碼由") || desc.includes("頁面重排") ||
-               desc.includes("頁碼遞移") || desc.includes("遞移至") ||
-               desc.includes("頁碼偏移") || desc.includes("版面調整") || desc.includes("頁碼同步更新") ||
-               desc.includes("內容無實質變更");
-      }
 
       // 判斷單一 change 項目是否為版本號/日期/版權類變更
       function isVersionChangeItem(c) {
@@ -1005,31 +989,6 @@
           const allHidden = Array.from(lis).every((li) => li.classList.contains("filtered-hidden"));
           card.classList.toggle("all-changes-hidden", allHidden);
         });
-      }
-
-      function toggleHideReorder() {
-        hideReorderActive = !hideReorderActive;
-        applyHideReorder();
-      }
-
-      function applyHideReorder() {
-        const btn = document.getElementById("hideReorderBtn");
-        const hint = document.getElementById("hideReorderHint");
-        let count = 0;
-        analyzeListEl.querySelectorAll(".analyze-changes li[data-fr='1']").forEach((li) => {
-          li.classList.toggle("filtered-hidden", hideReorderActive);
-          count++;
-        });
-        syncCardVisibility();
-        if (hideReorderActive) {
-          btn.textContent = "顯示頁面重排";
-          btn.style.background = "#0868c6";
-          hint.textContent = `已隱藏 ${count} 個頁面重排項目`;
-        } else {
-          btn.textContent = "隱藏頁面重排";
-          btn.style.background = "#475569";
-          hint.textContent = count ? `共 ${count} 個頁面重排項目` : "";
-        }
       }
 
       function toggleHideVersion() {
@@ -1057,7 +1016,6 @@
         }
       }
 
-      applyHideReorder();
       applyHideVersion();
       analyzeBtn.addEventListener("click", runAnalyze);
 
