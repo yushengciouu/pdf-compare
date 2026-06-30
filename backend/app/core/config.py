@@ -34,6 +34,7 @@ class Settings(BaseSettings):
 
     # LLM 分析相關設定
     llm_base_url: str = "http://192.168.39.143:8001"
+    llm_api_key: str | None = None
     llm_model: str = "gemma-4:31B"
     llm_max_tokens: int = 16384
     llm_temperature: float = 0.2

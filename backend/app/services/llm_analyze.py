@@ -692,6 +692,12 @@ def _call_llm(messages: list[dict], settings: Settings) -> str:
     呼叫 vLLM OpenAI-compatible API，回傳模型輸出的文字。
     """
     url = f"{settings.llm_base_url.rstrip('/')}/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json"
+    }
+    if settings.llm_api_key:
+        headers["Authorization"] = f"Bearer {settings.llm_api_key}"
+
     payload: dict[str, Any] = {
         "model": settings.llm_model,
         "messages": messages,
@@ -700,7 +706,7 @@ def _call_llm(messages: list[dict], settings: Settings) -> str:
     }
 
     with httpx.Client(timeout=settings.llm_timeout_sec) as client:
-        resp = client.post(url, json=payload)
+        resp = client.post(url, headers=headers, json=payload)
 
     if resp.status_code != 200:
         raise RuntimeError(f"LLM API 回傳錯誤 {resp.status_code}: {resp.text[:500]}")
