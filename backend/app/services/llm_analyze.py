@@ -486,7 +486,7 @@ def _build_prompt(
 - 若圖片與文字差異不一致，以**文字差異為準**，但仍說明圖片目視結果
 - 就算差異看似微小，只要確認存在差異，就必須如實列出，不得略過
 - 【重要過濾優化規則】：
-  1. 對於純粹的「頁碼變更（頁碼數字從 X 變更為 Y）」或「純粹的頁面位移（由於前文增刪導致的排版平移）」，除非該頁伴隨著「文字、金額、日期、規章文字、表格等實質欄位」之實質修改，否則【請完全不要耗費描述算力分析它】。只要它沒有任何實質內容（Content）變更，不論它頁碼如何偏移，請將其 importance 設為 "low"，且【不要】在 changes 或 description 中列出「頁碼從 X 變更為 Y」之類的變更（這類純重排已由系統在 prefilter 端和 Python 端自動低成本標記好！不需要 LLM 像記流水帳一樣逐頁書寫頁碼變更，避免浪費算力與 Token 空間）。
+  1. 對於純粹的「頁碼變更（頁碼數字從 X 變更為 Y）」或「純粹的頁面位移（由於前文增刪導致的排版平移）」，除非該頁伴隨著「文字、金額、日期、規章文字、表格等實質欄位」之實質修改，否則【請完全不要耗費描述算力分析它】。只要它沒有任何實質內容（Content）變更，不論它頁碼如何偏移，請將其 importance 設為 "low"，且【嚴禁】在 changes 列表中生成諸如「頁碼從 X 變更為 Y」、「頁碼從 12 變更為 13」這類純頁碼遞增或排版位移的 changes！請確保 changes 陣列為空 `[]`（這類純重排已由系統在 prefilter 端和 Python 端自動低成本標記好！不需要 LLM 像記流水帳一樣逐頁書寫頁碼變更，避免浪費算力與 Token 空間）。
   2. 同理，目錄（Table of Contents）中的純頁碼偏移遞移或排版變化，如果只是因為後面章節排版順延導致的「文字目錄頁碼數字改變」，實質上的章節與文字規章並無修改，亦【不需要】輸出 changes！只有在目錄中有「新增了全新章節名稱」或「刪除了某章節」時才需輸出 added 或 removed changes。
   3. 即：只有在頁面有實質內容（"category": "content"）變動、或存在有重大意涵的管理資訊變動時才需要列出。若是純頁面重排、純頁碼改變且沒有實質文字修改，請直接將此頁的 changes 陣列留空 `[]`！
 
@@ -536,7 +536,7 @@ def _build_prompt(
   1. 在 summary 中清楚、完整指出兩者，例如：「頁面位移與內容修訂，5.15.5 節新增參考文件 W-333。」
   2. 在 changes 中，你【必須同時】輸出多個變更，不可合併成一條或省略實質變更！
      - 輸出實質內容變更一條：`{"type": "added"|"modified", "category": "content", "description": "在 5.15.5 規範中新增參考文件 W-333 For 2.5D and 3D Device OSAT Qualification Working Instruction"}`
-     - 輸出頁碼編排變更一條：`{"type": "modified", "category": "reorder", "description": "頁碼從 47 變更為 54（頁面重排）"}`
+     - 輸出編號遞移變更一條：`{"type": "modified", "category": "reorder", "description": "圖表編號因版面順延而由 Table 5-2 更名為 Table 5-3"}`
 - 頁面整體移位（reorder）與區域性實質內容變更（content）是【並存的，完全不排斥的】！若因為重排而漏掉具體新加入的文件、數值或關鍵條例，將被視為【嚴重漏判】。
 
 《頁面重排舉例》
@@ -1171,7 +1171,7 @@ def _cross_match_and_correct_changes(
                         
                         change["type"] = "modified"
                         change["category"] = "reorder"
-                        change["description"] = f"因頁面排版位移，由舊版第 {matched_page} 頁移動至新版第 {curr_after or 'N/A'} 頁：{desc}"
+                        change["description"] = f"{desc}"
 
                 # 3. 在新版中尋找（針對 removed 或 modified）
                 if t in ("removed", "modified") and not matched_page:
@@ -1273,7 +1273,7 @@ def _cross_match_and_correct_changes(
                         
                         change["type"] = "modified"
                         change["category"] = "reorder"
-                        change["description"] = f"因頁面排版位移，由舊版第 {curr_before or 'N/A'} 頁移動至新版第 {matched_page} 頁：{desc}"
+                        change["description"] = f"{desc}"
 
     # 4. 如果一個頁面裡所有的 changes 最終都被修正成了 category="reorder"，則將該頁重要度調降為 Importance = "low"
     for page in merged_pages:
@@ -1399,11 +1399,11 @@ def _deduplicate_cross_slot_reflows(merged_pages: list[dict]) -> list[dict]:
                 # 修改原 description 與類別
                 add_item["change"]["type"] = "modified"
                 add_item["change"]["category"] = "reorder"
-                add_item["change"]["description"] = f"因頁面重排由舊版第 {from_p} 頁位移至新版第 {to_p} 頁：{add_item['desc']}"
+                add_item["change"]["description"] = f"{add_item['desc']}"
 
                 rem_item["change"]["type"] = "modified"
                 rem_item["change"]["category"] = "reorder"
-                rem_item["change"]["description"] = f"因頁面重排由舊版第 {from_p} 頁位移至新版第 {to_p} 頁：{rem_item['desc']}"
+                rem_item["change"]["description"] = f"{rem_item['desc']}"
                 break
 
     # 3. 重新校準所有頁面的 Importance 與 Summary
@@ -1748,6 +1748,22 @@ def build_analyze_report(
         
         # 進行全文跨頁文字實體對照二檢二次校正（防範 H200 分批分析下的虛假新增/刪除）
         merged_pages = _cross_match_and_correct_changes(merged_pages, before_texts, after_texts)
+
+        # 這裡過濾掉單純的頁碼流水帳（description 僅含有頁碼/頁面/Slot 變更等，無實質業務字詞）
+        import re
+        pure_page_pattern = re.compile(
+            r"^(頁碼|頁面|槽位)?\s*(從|由)?\s*\d+\s*(變更為|移至|位移至|移動至|變為|到)\s*\d+\s*(\(頁面重排\))?$",
+            re.IGNORECASE
+        )
+        for page in merged_pages:
+            filtered_changes = []
+            for change in page.get("changes", []):
+                desc = change.get("description", "").strip()
+                # 若完全匹配單純頁碼變更的正則，且非 added (多為 modified)，或者是 reorder 類別中只講頁碼，則略過
+                if pure_page_pattern.match(desc) or desc in ["頁碼變更", "頁面重排", "純頁碼改變"]:
+                    continue
+                filtered_changes.append(change)
+            page["changes"] = filtered_changes
 
         # 暫不隱藏，所有 type/category（包含 reorder、version）均完整傳給前端渲染
         # 建立 slot → changes 對照表，傳給 _persist_renders 做文字搜尋
