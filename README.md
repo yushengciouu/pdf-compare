@@ -148,7 +148,7 @@ flowchart TD
 | 用途 | 技術 |
 |------|------|
 | API 服務 | Python 3.11 · FastAPI · Uvicorn |
-| 背景任務佇列 | Celery · Redis |
+| 背景任務佇列 | FastAPI BackgroundTasks（無須 Redis / Celery） |
 | PDF 渲染 & 文字提取 | PyMuPDF（fitz） |
 | 影像對齊 & 差異計算 | OpenCV · NumPy |
 | 頁面配對演算法 | 自製動態規劃（仿 Needleman-Wunsch） |
