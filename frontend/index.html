@@ -111,40 +111,6 @@
         font-size: 10px;
         letter-spacing: 0.12em;
       }
-      .view-controls {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-top: 10px;
-        flex-wrap: wrap;
-      }
-      .view-controls input[type="range"] {
-        width: 220px;
-        min-height: 24px;
-      }
-      .view-controls button {
-        width: auto;
-        min-width: 150px;
-      }
-      .view-controls .mini-range {
-        width: 120px;
-      }
-      .view-controls .toggle {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 13px;
-      }
-      .view-controls .toggle input {
-        width: 16px;
-        min-height: 16px;
-        margin: 0;
-      }
-      .view-controls .small-select {
-        width: 130px;
-        min-height: 34px;
-        padding: 4px 8px;
-      }
       .action-col {
         display: grid;
         gap: 8px;
@@ -245,28 +211,6 @@
         font-size: 12px;
         overflow-wrap: anywhere;
       }
-      .progress {
-        margin-top: 10px;
-      }
-      .progress-track {
-        width: 100%;
-        height: 10px;
-        border-radius: 999px;
-        background: #e8eef6;
-        overflow: hidden;
-        border: 1px solid #d3dce9;
-      }
-      .progress-fill {
-        width: 0%;
-        height: 100%;
-        background: linear-gradient(90deg, #0a64be, #2e8be9);
-        transition: width 0.25s ease;
-      }
-      .progress-text {
-        margin-top: 6px;
-        color: var(--muted);
-        font-size: 12px;
-      }
       .err {
         color: var(--danger);
       }
@@ -274,109 +218,6 @@
         font-family: Consolas, Menlo, monospace;
       }
 
-      .compare-layout {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 18px;
-        align-items: start;
-      }
-      .pane {
-        background: #faf9f6;
-        border: 1px solid #d7d2ca;
-        border-radius: 6px;
-        height: calc(100vh - 220px);
-        overflow: auto;
-        padding: 14px;
-        box-shadow: 0 12px 28px rgba(56, 48, 39, 0.08);
-      }
-      .pane h3 {
-        position: sticky;
-        top: -14px;
-        z-index: 5;
-        margin: -14px -14px 12px;
-        padding: 14px;
-        background: #faf9f6;
-        border-bottom: 1px solid #d7d2ca;
-        font-size: 15px;
-        color: var(--accent-dark);
-      }
-      .page-card {
-        border: 1px solid #d5ddeb;
-        background: #fff;
-        border-radius: 10px;
-        margin-bottom: 10px;
-        padding: 8px;
-        transition: box-shadow 0.2s ease, border-color 0.2s ease;
-      }
-      .page-card.focused {
-        border-color: #1f6fcd;
-        box-shadow: 0 0 0 3px rgba(31, 111, 205, 0.2);
-      }
-      .page-head {
-        display: flex;
-        justify-content: space-between;
-        font-size: 12px;
-        margin-bottom: 6px;
-        color: #3f4d63;
-      }
-      .state-badge {
-        display: inline-block;
-        padding: 2px 8px;
-        border-radius: 999px;
-        font-size: 11px;
-        font-weight: 700;
-        border: 1px solid transparent;
-      }
-      .state-badge.paired {
-        background: #eef5ff;
-        color: #24548a;
-        border-color: #c8dbf5;
-      }
-      .state-badge.inserted {
-        background: #eaf8f4;
-        color: #0f6a50;
-        border-color: #bfe9dd;
-      }
-      .state-badge.deleted {
-        background: #fdeeee;
-        color: #a22727;
-        border-color: #f7caca;
-      }
-      .img-wrap {
-        position: relative;
-        border: 1px solid #e6ebf2;
-        background: #fafafa;
-        border-radius: 8px;
-        min-height: 220px;
-      }
-      .img-wrap img {
-        width: 100%;
-        display: block;
-        border-radius: 8px;
-      }
-      .img-wrap .mask {
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-        object-fit: contain;
-        pointer-events: none;
-        mix-blend-mode: multiply;
-        opacity: 0.56;
-      }
-      .img-wrap .state-mask {
-        position: absolute;
-        inset: 0;
-        pointer-events: none;
-        border-radius: 8px;
-        z-index: 4;
-      }
-      .img-wrap .state-mask.inserted {
-        background: rgba(44, 173, 143, 0.32);
-      }
-      .img-wrap .state-mask.deleted {
-        background: rgba(215, 73, 73, 0.34);
-      }
       .placeholder {
         min-height: 220px;
         display: grid;
@@ -659,19 +500,6 @@
         cursor: default;
       }
 
-      @media (max-width: 1200px) {
-        .compare-layout {
-          grid-template-columns: 1fr 1fr;
-        }
-      }
-      @media (max-width: 980px) {
-        .compare-layout {
-          grid-template-columns: 1fr;
-        }
-        .pane {
-          height: 55vh;
-        }
-      }
       @media (max-width: 900px) {
         .top-grid {
           grid-template-columns: 1fr;
@@ -765,23 +593,6 @@
         </div>
 
         <div class="status" id="status" role="status" aria-live="polite" style="display:none">尚未開始</div>
-        <div class="progress" style="display:none">
-          <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
-          <div id="progressText" class="progress-text">0%</div>
-        </div>
-        <div class="view-controls" style="display:none">
-          <label for="maskOpacity" class="mono">遮罩</label>
-          <input id="maskOpacity" class="mini-range" type="range" min="25" max="85" step="5" value="56" />
-          <span id="maskOpacityText" class="mono">56%</span>
-          <label for="markMode" class="mono">標記方式</label>
-          <select id="markMode" class="small-select">
-            <option value="all" selected>全部差異</option>
-            <option value="removed">只看左有右無</option>
-            <option value="added">只看右有左無</option>
-          </select>
-
-        </div>
-        <div class="status">任務 ID：<span id="job" class="mono">-</span></div>
         <div id="analyzeSection" style="margin-top: 10px; display: none;">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
             <button id="hideVersionBtn" type="button" style="background:#475569;min-width:0;width:auto;padding:6px 14px;font-size:13px;" onclick="toggleHideVersion()">隱藏版本號變更</button>
@@ -813,19 +624,6 @@
         </div>
       </section>
 
-      <section class="compare-layout" style="display:none">
-        <section class="pane" id="beforePane">
-          <h3>Before</h3>
-          <div id="beforePages" class="pages"></div>
-        </section>
-
-        <section class="pane" id="afterPane">
-          <h3>After + Diff Mask（紅=左有右無，青=右有左無）</h3>
-          <div id="afterPages" class="pages"></div>
-        </section>
-
-      </section>
-
       <!-- 跳至最上方按鈕 -->
       <button id="scrollToTopBtn" class="scroll-to-top-btn" title="跳至最上方">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -843,7 +641,6 @@
       const analyzeBtn = document.getElementById("analyzeBtn");
       const MAX_FILE_SIZE = 50 * 1024 * 1024;
       const analyzeSectionEl = document.getElementById("analyzeSection");
-      const analyzeStatusEl = document.getElementById("analyzeStatus");
       const analyzeSpinnerRowEl = document.getElementById("analyzeSpinnerRow");
       const analyzeTimerTextEl = document.getElementById("analyzeTimerText");
       const analyzeStatusTextEl = document.getElementById("analyzeStatusText");
@@ -1083,6 +880,9 @@
         analyzeSectionEl.style.display = "block";
         analyzeOverallEl.style.display = "none";
         analyzeListEl.innerHTML = "";
+        analyzeBrowserEl.style.display = "none";
+        analyzeBrowserBeforePagesEl.innerHTML = "";
+        analyzeBrowserAfterPagesEl.innerHTML = "";
         startAnalyzeTimer();
 
         try {
@@ -1162,20 +962,19 @@
               browser.style.display = "";
               // main window 瞬間跳到 browser
               browser.scrollIntoView({ behavior: "instant", block: "start" });
-              // pane 有 position:relative，card.offsetTop 即相對 pane 的距離
-              // 減掉 h4 sticky header 高度（~34px）
-              const H4_H = 34;
               const beforeCard = document.getElementById(`analyze-before-slot-${slotId}`);
               if (beforeCard) {
                 const pane = document.getElementById("analyzeBrowserBefore");
-                pane.scrollTop = beforeCard.offsetTop - H4_H;
+                const headerHeight = pane.querySelector("h4")?.offsetHeight || 0;
+                pane.scrollTop = beforeCard.offsetTop - headerHeight;
                 beforeCard.style.outline = "2px solid #3b82f6";
                 setTimeout(() => { beforeCard.style.outline = ""; }, 1800);
               }
               const afterCard = document.getElementById(`analyze-after-slot-${slotId}`);
               if (afterCard) {
                 const pane = document.getElementById("analyzeBrowserAfter");
-                pane.scrollTop = afterCard.offsetTop - H4_H;
+                const headerHeight = pane.querySelector("h4")?.offsetHeight || 0;
+                pane.scrollTop = afterCard.offsetTop - headerHeight;
                 afterCard.style.outline = "2px solid #3b82f6";
                 setTimeout(() => { afterCard.style.outline = ""; }, 1800);
               }
