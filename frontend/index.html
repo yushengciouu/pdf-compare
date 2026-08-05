@@ -6,12 +6,15 @@
     <title>PDF Compare Viewer</title>
     <style>
       :root {
-        --bg: #f2f5f8;
-        --card: #ffffff;
-        --text: #1f2937;
-        --muted: #637083;
-        --line: #d6dde6;
+        --bg: #eef3f7;
+        --card: rgba(255, 255, 255, 0.94);
+        --text: #172536;
+        --muted: #657487;
+        --line: #d5dee8;
         --accent: #0868c6;
+        --accent-dark: #06498d;
+        --accent-soft: #e8f2fc;
+        --ink-soft: #f7fafc;
         --danger: #b42318;
         --mask: rgba(255, 64, 64, 0.28);
       }
@@ -22,23 +25,59 @@
         margin: 0;
         font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif;
         color: var(--text);
-        background: radial-gradient(circle at 0 0, #dbeeff, var(--bg) 45%);
+        background:
+          radial-gradient(circle at 12% -8%, rgba(90, 172, 235, 0.28), transparent 33%),
+          linear-gradient(135deg, #f7fafc 0%, var(--bg) 52%, #e8eef4 100%);
+        min-height: 100vh;
       }
       main {
-        max-width: 96vw;
-        margin: 20px auto;
-        padding: 0 16px 24px;
+        max-width: 1480px;
+        margin: 0 auto;
+        padding: 30px 24px 40px;
       }
       .card {
         background: var(--card);
-        border-radius: 14px;
-        box-shadow: 0 10px 30px rgba(9, 30, 66, 0.08);
+        border-radius: 18px;
+        box-shadow: 0 18px 45px rgba(31, 56, 82, 0.1);
         border: 1px solid #e8edf3;
-        padding: 16px;
-        margin-bottom: 12px;
+        padding: 22px;
+        margin-bottom: 18px;
+        backdrop-filter: blur(12px);
+      }
+      .hero-card {
+        position: relative;
+        overflow: hidden;
+      }
+      .hero-card::before {
+        content: "";
+        position: absolute;
+        inset: 0 0 auto;
+        height: 5px;
+        background: linear-gradient(90deg, var(--accent-dark), #3b9be8 55%, #79c8ba);
+      }
+      .eyebrow {
+        margin: 2px 0 8px;
+        color: var(--accent);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .hero-copy {
+        max-width: 680px;
+        margin-bottom: 20px;
+      }
+      .hero-copy p {
+        margin-top: 8px;
+        line-height: 1.7;
       }
       h1 {
-        margin: 0 0 4px;
+        margin: 0;
+        color: #10283f;
+        font-family: Georgia, "Noto Serif TC", serif;
+        font-size: clamp(28px, 3vw, 42px);
+        line-height: 1.12;
+        letter-spacing: 0;
       }
       p {
         margin: 0;
@@ -48,7 +87,13 @@
         display: grid;
         grid-template-columns: 1fr 1fr auto;
         gap: 10px;
-        margin-top: 14px;
+        margin-top: 18px;
+      }
+      .top-grid > div:not(.action-col) {
+        padding: 14px;
+        border: 1px solid #dce6ef;
+        border-radius: 13px;
+        background: var(--ink-soft);
       }
       .view-controls {
         display: flex;
@@ -91,6 +136,7 @@
       label {
         display: block;
         font-size: 14px;
+        font-weight: 700;
         margin-bottom: 6px;
       }
       input,
@@ -104,12 +150,19 @@
         font-size: 14px;
       }
       button {
-        background: var(--accent);
+        background: linear-gradient(135deg, var(--accent), #1684d8);
         border: 0;
         color: #fff;
         font-weight: 700;
         cursor: pointer;
         min-width: 120px;
+        box-shadow: 0 7px 16px rgba(8, 104, 198, 0.2);
+        transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
+      }
+      button:hover:not(:disabled) {
+        filter: brightness(1.04);
+        transform: translateY(-1px);
+        box-shadow: 0 10px 20px rgba(8, 104, 198, 0.26);
       }
       button:disabled {
         opacity: 0.6;
@@ -118,6 +171,13 @@
       .status {
         margin-top: 12px;
         font-size: 14px;
+      }
+      .file-meta {
+        min-height: 20px;
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 12px;
+        overflow-wrap: anywhere;
       }
       .progress {
         margin-top: 10px;
@@ -151,20 +211,28 @@
       .compare-layout {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 12px;
+        gap: 16px;
         align-items: start;
       }
       .pane {
-        background: #f8fafc;
-        border: 1px solid #dce3ec;
-        border-radius: 12px;
+        background: rgba(247, 250, 252, 0.92);
+        border: 1px solid #d3dee9;
+        border-radius: 16px;
         height: calc(100vh - 220px);
         overflow: auto;
-        padding: 10px;
+        padding: 14px;
+        box-shadow: 0 12px 28px rgba(31, 56, 82, 0.07);
       }
       .pane h3 {
-        margin: 0 0 8px;
+        position: sticky;
+        top: -14px;
+        z-index: 5;
+        margin: -14px -14px 12px;
+        padding: 14px;
+        background: rgba(247, 250, 252, 0.96);
+        border-bottom: 1px solid #dce5ed;
         font-size: 15px;
+        color: #26445f;
       }
       .page-card {
         border: 1px solid #d5ddeb;
@@ -278,15 +346,15 @@
       }
       /* LLM 分析結果 */
       .btn-analyze {
-        background: #5a2d91;
+        background: linear-gradient(135deg, #087f83, #0b9b91);
       }
       .analyze-overall {
-        background: #f3f0fa;
-        border: 1px solid #ccc0e8;
+        background: #edf8f6;
+        border: 1px solid #b9e1da;
         border-radius: 10px;
         padding: 10px 14px;
         font-size: 14px;
-        color: #2e1a55;
+        color: #174d4a;
         margin-bottom: 10px;
         line-height: 1.6;
       }
@@ -296,10 +364,10 @@
         margin-top: 6px;
       }
       .analyze-item {
-        border: 1px solid #d5ccea;
+        border: 1px solid #c7dedb;
         border-radius: 10px;
         padding: 10px 12px;
-        background: #fdfcff;
+        background: #fbfefd;
         font-size: 13px;
       }
       .analyze-item-head {
@@ -308,7 +376,7 @@
         gap: 8px;
         margin-bottom: 6px;
         font-weight: 600;
-        color: #2c1f4a;
+        color: #194f50;
       }
       .jump-preview-btn {
         align-self: center;
@@ -518,18 +586,23 @@
   </head>
   <body>
     <main>
-      <section class="card">
+      <section class="card hero-card">
+        <div class="hero-copy">
+          <div class="eyebrow">Document review workspace</div>
         <h1>PDF Compare Viewer</h1>
-        <!-- <p> 差異清單（目前為影像層比對版）</p> -->
+          <p>快速看見兩個 PDF 版本之間的頁面、文字與內容差異。</p>
+        </div>
 
         <div class="top-grid">
           <div>
             <label for="before">舊版 PDF</label>
             <input id="before" type="file" accept="application/pdf" />
+            <div id="beforeMeta" class="file-meta">尚未選擇檔案</div>
           </div>
           <div>
             <label for="after">新版 PDF</label>
             <input id="after" type="file" accept="application/pdf" />
+            <div id="afterMeta" class="file-meta">尚未選擇檔案</div>
           </div>
           <div class="action-col">
             <label>&nbsp;</label>
@@ -537,7 +610,7 @@
           </div>
         </div>
 
-        <div class="status" id="status">尚未開始</div>
+        <div class="status" id="status" role="status" aria-live="polite">尚未開始</div>
         <div class="progress" style="display:none">
           <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
           <div id="progressText" class="progress-text">0%</div>
@@ -609,8 +682,11 @@
     <script>
       const beforeInput = document.getElementById("before");
       const afterInput = document.getElementById("after");
+      const beforeMeta = document.getElementById("beforeMeta");
+      const afterMeta = document.getElementById("afterMeta");
       const statusEl = document.getElementById("status");
       const analyzeBtn = document.getElementById("analyzeBtn");
+      const MAX_FILE_SIZE = 50 * 1024 * 1024;
       const analyzeSectionEl = document.getElementById("analyzeSection");
       const analyzeStatusEl = document.getElementById("analyzeStatus");
       const analyzeSpinnerRowEl = document.getElementById("analyzeSpinnerRow");
@@ -630,6 +706,29 @@
       function setStatus(text, isError = false) {
         statusEl.textContent = text;
         statusEl.classList.toggle("err", isError);
+      }
+
+      function formatFileSize(bytes) {
+        if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+      }
+
+      function validateFile(file) {
+        if (!file) return "尚未選擇檔案";
+        if (!file.name.toLowerCase().endsWith(".pdf")) return "請選擇 PDF 檔案";
+        if (file.size > MAX_FILE_SIZE) return "檔案超過 50 MB 上限";
+        return `${file.name} · ${formatFileSize(file.size)}`;
+      }
+
+      function updateFileState(input, meta) {
+        const file = input.files?.[0];
+        const message = validateFile(file);
+        const valid = Boolean(file) && message.includes(" · ");
+        meta.textContent = message;
+        meta.classList.toggle("err", Boolean(file) && !valid);
+        input.setCustomValidity(valid ? "" : message);
+        analyzeBtn.disabled = !validateFile(beforeInput.files?.[0]).includes(" · ") ||
+          !validateFile(afterInput.files?.[0]).includes(" · ");
       }
 
       let syncAnalyzeHeightTimer = null;
@@ -808,8 +907,8 @@
       async function runAnalyze() {
         const before = beforeInput.files?.[0];
         const after = afterInput.files?.[0];
-        if (!before || !after) {
-          setStatus("請先選擇兩份 PDF", true);
+        if (!before || !after || analyzeBtn.disabled) {
+          setStatus("請先選擇兩份未超過 50 MB 的 PDF", true);
           return;
         }
 
@@ -1025,6 +1124,10 @@
       }
 
       applyHideVersion();
+      beforeInput.addEventListener("change", () => updateFileState(beforeInput, beforeMeta));
+      afterInput.addEventListener("change", () => updateFileState(afterInput, afterMeta));
+      updateFileState(beforeInput, beforeMeta);
+      updateFileState(afterInput, afterMeta);
       analyzeBtn.addEventListener("click", runAnalyze);
 
       // 「跳至最上方」按鈕顯示與隱藏及滾動邏輯
