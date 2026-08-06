@@ -160,6 +160,8 @@ flowchart TD
 ## 快速開始（Docker）
 
 ```powershell
+cd C:\path\to\pdf-compare
+
 # 首次啟動（建置映像）
 docker compose up --build
 
@@ -170,7 +172,7 @@ docker compose down
 docker compose up
 ```
 
-啟動後開啟瀏覽器：`http://127.0.0.1:8000/`
+啟動後開啟瀏覽器：`http://127.0.0.1:8081/`
 
 啟動方式與部署說明已整合在本 README 的「使用與部署」章節。
 
@@ -193,7 +195,7 @@ docker compose up
 | `GET` | `/docs` | Swagger 互動文件 |
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/compare \
+curl -X POST http://127.0.0.1:8081/api/compare \
   -F "before=@before.pdf" \
   -F "after=@after.pdf" \
   -F "mode=smart"
@@ -275,20 +277,6 @@ git fetch --all
 git reset --hard origin/feat/text-diff-highlight
 docker compose up -d --build
 ```
-
-### 同一台伺服器建立測試環境
-
-在另一個資料夾 clone 專案，並將測試版 `docker-compose.yml` 的對外 Port 從 `8080` 改為 `8081`：
-
-```bash
-cd /home/user/pro
-git clone https://github.com/yushengciouu/pdf-compare.git pdf-compare-test
-cd pdf-compare-test
-sed -i 's/"8080:8000"/"8081:8000"/' docker-compose.yml
-docker compose up -d --build
-```
-
-正式版使用 `http://伺服器IP:8080/`，測試版使用 `http://伺服器IP:8081/`。關閉測試版時，在測試版目錄執行 `docker compose down`。
 
 ### 資料與自動清理
 
