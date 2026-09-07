@@ -75,6 +75,40 @@ def _png_to_base64(png_path: Path) -> str:
     return f"data:image/png;base64,{data}"
 
 
+def _combine_before_after_png(before_png: Path | None, after_png: Path | None) -> str | None:
+    """
+    將舊版與新版頁面 PNG 圖片水平合併為一張併排對照圖（左：舊版，右：新版），
+    將每個槽位的圖片數從 2 張降為 1 張，相容單次請求圖片數量限制的 vLLM / LLM 服務。
+    """
+    import cv2
+    import numpy as np
+
+    img_b = cv2.imread(str(before_png)) if before_png and before_png.exists() else None
+    img_a = cv2.imread(str(after_png)) if after_png and after_png.exists() else None
+
+    if img_b is None and img_a is None:
+        return None
+    if img_b is None:
+        combined = img_a
+    elif img_a is None:
+        combined = img_b
+    else:
+        h_b, w_b = img_b.shape[:2]
+        h_a, w_a = img_a.shape[:2]
+        target_h = max(h_b, h_a)
+        if h_b != target_h:
+            img_b = cv2.resize(img_b, (int(w_b * target_h / h_b), target_h), interpolation=cv2.INTER_AREA)
+        if h_a != target_h:
+            img_a = cv2.resize(img_a, (int(w_a * target_h / h_a), target_h), interpolation=cv2.INTER_AREA)
+        combined = np.hstack((img_b, img_a))
+
+    success, buf = cv2.imencode(".png", combined)
+    if not success:
+        return None
+    b64 = base64.b64encode(buf.getvalue() if hasattr(buf, "getvalue") else buf).decode("ascii")
+    return f"data:image/png;base64,{b64}"
+
+
 # 章節號碼正則：匹配如 5.2.3、5.12.1.2、A.、(1) 等独立章節號
 # 使用負向前看 (negative lookbehind) 確保正前不是數字或句號，
 # 避免將 5.2.1 裡的 ".1" 誤切為新對法
@@ -207,29 +241,17 @@ def _build_page_message_content(
         and text_diff < 0.25
     )
 
-    # --- 舊版（before）圖片 ---
-    if not offset_skip_images and before_page is not None:
-        before_png = before_render_dir / f"{int(before_page):04d}.png"
-        if before_png.exists():
-            content.append({"type": "text", "text": "【舊版頁面截圖】"})
-            content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": _png_to_base64(before_png)},
-                }
-            )
-
-    # --- 新版（after）圖片 ---
-    if not offset_skip_images and after_page is not None:
-        after_png = after_render_dir / f"{int(after_page):04d}.png"
-        if after_png.exists():
-            content.append({"type": "text", "text": "【新版頁面截圖】"})
-            content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": _png_to_base64(after_png)},
-                }
-            )
+    # --- 圖片對照 (併排合併為 1 張圖) ---
+    if not offset_skip_images:
+        before_png = before_render_dir / f"{int(before_page):04d}.png" if before_page is not None else None
+        after_png = after_render_dir / f"{int(after_page):04d}.png" if after_page is not None else None
+        combined_b64 = _combine_before_after_png(before_png, after_png)
+        if combined_b64:
+            content.append({"type": "text", "text": "【前後版本頁面併排對照圖 (左: 舊版 / 右: 新版)】"})
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": combined_b64},
+            })
 
     # --- 文字差異 ---
     before_text = before_texts[int(before_page) - 1] if before_page else ""
@@ -690,6 +712,19 @@ def _dump_llm_debug(messages: list[dict], settings: Settings, raw_response: str 
     return debug_root
 
 
+def _strip_images_from_messages(messages: list[dict]) -> list[dict]:
+    """從 messages 中移除所有 image_url，保留純文字內容。"""
+    clean = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            filtered = [item for item in content if item.get("type") == "text"]
+            clean.append({"role": msg["role"], "content": filtered})
+        else:
+            clean.append(msg)
+    return clean
+
+
 def _call_llm(messages: list[dict], settings: Settings) -> str:
     """
     呼叫 vLLM OpenAI-compatible API，回傳模型輸出的文字。
@@ -707,6 +742,8 @@ def _call_llm(messages: list[dict], settings: Settings) -> str:
         "max_tokens": settings.llm_max_tokens,
         "temperature": settings.llm_temperature,
     }
+    if settings.llm_model.lower().startswith("qwen"):
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
 
     with httpx.Client(timeout=settings.llm_timeout_sec) as client:
         resp = client.post(url, headers=headers, json=payload)
@@ -715,7 +752,11 @@ def _call_llm(messages: list[dict], settings: Settings) -> str:
         raise RuntimeError(f"LLM API 回傳錯誤 {resp.status_code}: {resp.text[:500]}")
 
     data = resp.json()
-    return data["choices"][0]["message"]["content"]
+    message = data["choices"][0]["message"]
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("LLM 回應沒有可解析的文字內容")
+    return content
 
 
 def _parse_llm_response(raw: str, candidates: list[dict]) -> dict:
@@ -1619,7 +1660,18 @@ def build_analyze_report(
                     _dump_llm_debug(batch_messages, settings, raw_res)
                     return _parse_llm_response(raw_res, batch_cands)
                 except Exception as e:
-                    # 當個別 Batch 發生故障時，採取優雅降級保護阻斷
+                    # 若因伺服器圖片數量限制或 Bad Request 失敗，自動降級為純文字 Diff 模式重試
+                    err_str = str(e)
+                    if "400" in err_str or "image" in err_str.lower() or "multimodal" in err_str.lower():
+                        try:
+                            text_messages = _strip_images_from_messages(batch_messages)
+                            raw_res = _call_llm(text_messages, settings)
+                            _dump_llm_debug(text_messages, settings, raw_res)
+                            return _parse_llm_response(raw_res, batch_cands)
+                        except Exception as retry_err:
+                            e = retry_err
+
+                    # 當降級後依然故障時，採取優雅降級保護阻斷
                     err_pages = []
                     for c in batch_cands:
                         err_pages.append({
@@ -1659,17 +1711,20 @@ def build_analyze_report(
             candidate = slot_to_candidate[slot_no]
             if slot_no in auto_reflow_slots:
                 # 自動分類為高可信度頁面重排，不需 LLM
+                bp = candidate.get("before_page")
+                ap = candidate.get("after_page")
+                reflow_summary = f"跨頁文字與段落排版位移（舊版第 {bp} 頁 ↔ 新版第 {ap} 頁，無實質修改）"
                 merged_pages.append(
                     {
                         "slot": slot_no,
                         "state": candidate["state"],
-                        "before_page": candidate.get("before_page"),
-                        "after_page": candidate.get("after_page"),
+                        "before_page": bp,
+                        "after_page": ap,
                         "image_diff": candidate.get("image_diff", 0.0),
                         "text_diff": candidate.get("text_diff", 0.0),
                         "reason": candidate.get("reason", ""),
                         "importance": "low",
-                        "summary": "",
+                        "summary": reflow_summary,
                         "changes": [],
                     }
                 )
@@ -1677,7 +1732,7 @@ def build_analyze_report(
                 llm_page = slot_to_llm.get(slot_no, {})
                 state = candidate["state"]
                 importance = llm_page.get("importance", "medium")
-                summary = llm_page.get("summary", "")
+                summary = llm_page.get("summary", "").strip()
                 changes = llm_page.get("changes", [])
 
                 # 邏輯護欄：強制將新增/刪除頁的變更類型與類別修正為對應格式，確保不被誤判為重排/修改
@@ -1727,6 +1782,9 @@ def build_analyze_report(
                         })
                     changes = fixed_changes
 
+                if not summary and changes:
+                    summary = "；".join(c.get("description", "").strip() for c in changes if c.get("description"))
+
                 merged_pages.append(
                     {
                         "slot": slot_no,
@@ -1737,7 +1795,7 @@ def build_analyze_report(
                         "text_diff": candidate.get("text_diff", 0.0),
                         "reason": candidate.get("reason", ""),
                         "importance": importance,
-                        "summary": "",
+                        "summary": summary,
                         "changes": changes,
                     }
                 )
@@ -1776,10 +1834,12 @@ def build_analyze_report(
             slot_to_changes=slot_to_changes,
         )
 
+        overall_summary = _generate_overall_summary(merged_pages, settings)
+
         return {
             "summary": prefilter_report["summary"],
             "thresholds": prefilter_report["thresholds"],
-            "overall_summary": llm_result.get("overall_summary", ""),
+            "overall_summary": overall_summary,
             "pages": merged_pages,
             "render_id": render_id,
             "all_slots": all_slots,

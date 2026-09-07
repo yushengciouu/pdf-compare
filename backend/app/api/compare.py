@@ -82,6 +82,7 @@ async def run_llm_analyze(
     text_threshold: Annotated[float, Form()] = 0.05,
     min_candidates: Annotated[int, Form()] = 6,
     neighbor_window: Annotated[int, Form()] = 1,
+    model: Annotated[str | None, Form()] = None,
     settings: Settings = Depends(get_settings),
 ) -> AnalyzeResponse:
     """
@@ -98,6 +99,11 @@ async def run_llm_analyze(
     """
     _validate_pdf(before)
     _validate_pdf(after)
+
+    selected_model = model.strip() if model else settings.llm_model
+    if not selected_model:
+        raise HTTPException(status_code=400, detail="未選擇 LLM 模型")
+    settings = settings.model_copy(update={"llm_model": selected_model})
 
     temp_dir = Path(tempfile.mkdtemp(prefix="pdf-llm-analyze-upload-"))
     try:
