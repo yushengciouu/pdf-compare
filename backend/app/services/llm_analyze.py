@@ -418,7 +418,7 @@ def _build_structure_context(candidates: list[dict]) -> str:
             lines.append(f"  Slot {slot:2d}: 舊版第 {bp} 頁 ↔ 新版第 {ap} 頁")
     lines.append(
         "\n⚠️ 注意：若文件中有新增頁（inserted），其後的頁面章節號碼會整體遞移。"
-        "請勿因章節號碼改變（如 5.5.6→5.5.7）就判斷為刪除，"
+        "請勿因章節號碼改變（如 2.1→2.2）就判斷為刪除，"
         "應比對內容是否仍存在於新版中。"
     )
     return "\n".join(lines)
@@ -513,7 +513,7 @@ def _build_prompt(
 
 《微小更動與格式誤差忽略規則（保護條款 - 極重要）》
 - 【嚴禁將無實質意義之微小變更列為新增或修改（忽略不回報）】：
-  1. 拼字或語法修補（例如：replace 修正為 replaced、display 修正為 displays、JOB_REV 變更為 JOB REV）。
+  1. 拼字或語法修補（例如：replace 修正為 replaced、display 修正為 displays 等純拼字或小語法微調）。
   2. 標點符號與英文大小寫更換（例如：半形逗號 `,` 改為全形逗號 `，`；英文句點 `.` 改為中文句號 `。`；單引號改雙引號；或前後多出一些空格）。
   3. 換行/斷行格式變化（例如：同一句長句在舊版因頁寬限制折成兩行，在新版折成三行，或新舊兩版句尾換行符不一致，導致 diff 中出現 `+` 或是 `-` 的片段）。
   4. 這些情況【絕非實質內容新增、更動】，不得視為 added 或 modified！對於此類無實質意義之變更，請【完全忽視且不提】，亦【不可】列入 changes 列表中！
@@ -521,7 +521,7 @@ def _build_prompt(
 
 《章節號碼偏移判斷規則》
 當文件中有新增頁（inserted）或刪除頁（deleted）時，後續章節的編號會整體偏移。
-- 若 before 頁有「5.5.6 OQC」，after 頁有「5.5.7 OQC」，內容相同 → 應判斷為 modified（章節號碼因新增章節而遞移），**不得**判斷為 removed
+- 若 before 頁有「2.1.3 節」，after 頁有「2.1.4 節」，內容相同 → 應判斷為 modified（章節號碼因新增章節而遞移），**不得**判斷為 removed
 - 只有當某段內容在 before 存在，且在整個 after 文件中完全找不到對應內容時，才能判斷為 removed
 - 章節號碼的改變本身屬於 modified（格式/編號調整）
 
@@ -534,7 +534,7 @@ def _build_prompt(
 在對任何「新增頁（inserted）」、「刪除頁（deleted）」或「配對頁中的 added/removed 變更」下結論前，請先執行以下步驟：
 1. 查閱 user 訊息開頭的「全文頁面摘要索引」（B###=舊版各頁摘要，A###=新版各頁摘要）。
 2. 許多所謂刪除或新增可能僅僅是「跨頁溢出」（即上一頁文字流動到了下一頁）。
-3. 【關鍵步驟 - 判斷跨頁與槽位溢出】：對 diff 中每一行以「+」或「-」開頭的段落或章節（如 5.5.6 OQC 檢驗之說明），請優先對照前後相鄰槽位（Slot N-1, Slot N+1）的文字：
+3. 【關鍵步驟 - 判斷跨頁與槽位溢出】：對 diff 中每一行以「+」或「-」開頭的段落或章節，請優先對照前後相鄰槽位（Slot N-1, Slot N+1）的文字：
    - 若段落內容同時在一個槽位被標為 `-` (刪除) 且在相鄰槽位被標為 `+` (新增) → 這代表純粹的跨頁溢出或頁面重排，**禁止**將其判定為實質刪除（removed）或實質新增（added）！
    - 請將此類項目歸類為 category: "reorder"（描述：因頁面重排、文字流動而溢出至相鄰頁面，無實質改變），或直接忽略不提。
 4. 【配對頁中的 added 內容 / 新增頁（非目錄）】：對「配對頁（paired）」中產生的實質新增內容、或是「新增頁（inserted，且該頁內容非目錄）」：搜尋其關鍵文字（章節號碼、段落首句）是否單純因偏移而已出現在舊版索引（B###）中的相鄰頁 → 若是，則該內容極可能是「頁面位移」而非真正的新增。
@@ -551,28 +551,28 @@ def _build_prompt(
   - 【刪除頁（deleted, after:-）】：邏輯同理。對於刪除頁中的所有內容，**必須將其判定為刪除（removed）**，不可判定為「重排（reorder）」或「修改（modified）」。其產生的變更 type 必須是 `"removed"`、category 必須是 `"content"`。
 
 《重排與實質內容變更並存判定規則（極重要）》
-- 即使某個配對槽位（paired）因為文件排版、跨頁位移等原因整體發生了重排（如舊版第 47 頁的內容被移動至新版第 54 頁），你【絕對不能】因為該頁有大量重排的內容，就直接下結論為「純頁面重排、無實質更動」而漏掉裡面的重要細節！
-- 只要在該頁面的文字差異（unified diff）中，看見了任何實質性的新增、刪除或修改（例如在 5.15.5 Advanced Package 規範中：新增了參考文件 / W-333 For 2.5D and 3D Device OSAT Qualification Working Instruction，或者修改了數字、修訂了規格描述），並且寫出具體的實質變動。
+- 即使某個配對槽位（paired）因為文件排版、跨頁位移等原因整體發生了重排（例如舊版內容因排版順延位移至新版不同頁碼），你【絕對不能】因為該頁有大量重排的內容，就直接下結論為「純頁面重排、無實質更動」而漏掉裡面的重要細節！
+- 只要在該頁面的文字差異（unified diff）中，看見了任何實質性的新增、刪除或修改（例如在某章節規範中新增了參考文件、修改了數值或修訂了規格描述），必須寫出具體的實質變動。
 - 對於這類重排與實質變更並存的槽位：
-  1. 在 summary 中清楚、完整指出兩者，例如：「頁面位移與內容修訂，5.15.5 節新增參考文件 W-333。」
+  1. 在 summary 中清楚、完整指出兩者，例如：「頁面位移與內容修訂，第 X 節新增參考文件規範。」
   2. 在 changes 中，你【必須同時】輸出多個變更，不可合併成一條或省略實質變更！
-     - 輸出實質內容變更一條：`{"type": "added"|"modified", "category": "content", "description": "在 5.15.5 規範中新增參考文件 W-333 For 2.5D and 3D Device OSAT Qualification Working Instruction"}`
-     - 輸出編號遞移變更一條：`{"type": "modified", "category": "reorder", "description": "圖表編號因版面順延而由 Table 5-2 更名為 Table 5-3"}`
+     - 輸出實質內容變更一條：`{"type": "added"|"modified", "category": "content", "description": "在規範中新增參考文件說明"}`
+     - 輸出編號遞移變更一條：`{"type": "modified", "category": "reorder", "description": "圖表編號因版面順延而由 Table 2-1 更名為 Table 2-2"}`
 - 頁面整體移位（reorder）與區域性實質內容變更（content）是【並存的，完全不排斥的】！若因為重排而漏掉具體新加入的文件、數值或關鍵條例，將被視為【嚴重漏判】。
 
 《頁面重排舉例》
-- diff 中 '+' 出現「5.2.5 Before the release...」，【舊版鄰頁文字（第 14 頁）】也有「5.2.5 Before the release...」
+- diff 中 '+' 出現某章節段落，若在【舊版鄰頁文字】中亦能找到實質相同段落
   → 這是頁面重排，不能列為 added，應列為 modified（page reflow）或忽略
-- diff 中 '+' 出現「5.17 MTK Mass Production...」，在所有舊版鄰頁文字中都找不到 5.17
+- diff 中 '+' 出現某全新章節段落，在所有舊版鄰頁及全文中都找不到對應內容
   → 這才是真正新增，列為 added
 
 《圖表編號遞移規則》
-文件新增章節或頁面後，Figure/Table 編號會整體遞移（例如 Figure 5-10 → Figure 5-12、Table 5-2 → Table 5-3）。
+文件新增章節或頁面後，Figure/Table 編號會整體遞移（例如 Figure 1-1 → Figure 1-2、Table 2-1 → Table 2-2）。
 判斷方式：
 - 若 diff 中出現 '+Figure X-N' 或 '+Table X-N'，先查【舊版鄰頁文字】是否有相同用途但編號較小的 'Figure X-M' 或 'Table X-M'（M < N）
-- 若欄位結構、欄位名稱（如 AUTOMOTIVE_PRODUCT、OUTLIER_SCREEN 等）或圖表說明文字實質相同，則這只是**編號遞移**，不是新增
+- 若欄位結構、欄位名稱或圖表說明文字實質相同，則這只是**編號遞移**，不是新增
 - 只有當新版圖表的欄位、內容與舊版所有圖表都不相同時，才列為 added
-- 編號遞移本身可列為 modified（描述：Figure 5-10 更名為 Figure 5-12 / Table 5-2 更名為 Table 5-3）
+- 編號遞移本身可列為 modified（描述：Figure 1-1 更名為 Figure 1-2 / Table 2-1 更名為 Table 2-2）
 
 請嚴格依照以下 JSON 格式回傳，不要輸出任何格式說明文字，只輸出 JSON：
 
@@ -594,7 +594,7 @@ def _build_prompt(
 《category 欄位說明》
 每個 change 項目必須填入以下三種 category 之一：
 - "content"：實質內容新增、刪除或修改（預設值，大多數 change 屬於此類）
-- "reorder"：頁碼偏移、章節號碼遞移（5.5.6→5.5.7）、圖表編號遞移（Figure 5-10→5-12）等純格式/排版變更，內容無實質差異
+- "reorder"：頁碼偏移、章節號碼遞移（例如 2.1→2.2）、圖表編號遞移（例如 Table 1→Table 2）等純格式/排版變更，內容無實質差異
 - "version"：文件版本號（Rev. No.、Version）、發布日期（Release date、發佈日期）、版權年份（© 20XX）等行政資訊變更
 
 重要度判斷標準：
@@ -885,8 +885,8 @@ def _extract_match_candidates(desc: str) -> list[str]:
     """
     從 description 中提取可以用作比對的特徵片段。
     優先提取：
-    1. 雙引號、單引號、書名號、括號、方括號內的文字，如「僅重新拔插或 Reboot...」、(MT3318)、W-333、LB_Repair_Verification_CheckList.xlsx
-    2. 長度 >= 4 的純英數字與底線條款 (如 OUTLIER_SCREEN, FT1 Yield)
+    1. 雙引號、單引號、書名號、括號、方括號內的文字，如「系統重啟說明」、(DOC-001)、CheckList.xlsx
+    2. 長度 >= 4 的純英數字與底線條款 (如 STATUS_CODE, Test Yield)
     3. 長度 >= 5 的連續中文字段
     """
     import re
@@ -1325,18 +1325,6 @@ def _cross_match_and_correct_changes(
                 ap = page.get("after_page")
                 page["summary"] = f"跨頁文字與段落位移（舊版第 {bp} 頁 ↔ 新版第 {ap} 頁，內容無實質修改）"
 
-    # 5. 強固特定章節細節修正（使用者特別提示修正項目：將 L/B 維修監控中的 5.12.24 變更為實際正確的 1.12.24.2）
-    for page in merged_pages:
-        for change in page.get("changes", []):
-            desc = change.get("description", "")
-            if "5.12.24" in desc and "L/B" in desc:
-                change["description"] = desc.replace("5.12.24", "1.12.24.2")
-        
-        # summary 也同步修正
-        s = page.get("summary", "")
-        if "5.12.24" in s and "L/B" in s:
-            page["summary"] = s.replace("5.12.24", "1.12.24.2")
-
     return merged_pages
 
 
@@ -1481,7 +1469,7 @@ def _generate_overall_summary(pages_results: list[dict], settings: Settings) -> 
     prompt = [
         {
             "role": "system",
-            "content": "你是一位專業的文件審查助手，請將以下各頁面的修改內容摘要，用繁體中文總結成一句簡短、流暢、不含 markdown 標記的「整份文件主要變更摘要」（約30-50字，例如：本次修訂主要新增了 5.15.5 Advanced Package 參考文件、調整了部分 LHS general 規範及目錄排版）。",
+            "content": "你是一位專業的文件審查助手，請將以下各頁面的修改內容摘要，用繁體中文總結成一句簡短、流暢、不含 markdown 標記的「整份文件主要變更摘要」（約30-50字，例如：本次修訂主要新增了部分章節參考文件、調整了作業規範條款及目錄排版）。",
         },
         {"role": "user", "content": f"各頁面變更如下：\n{combined_texts}\n\n請直接給出總結："},
     ]
@@ -1584,11 +1572,8 @@ def build_analyze_report(
             ap = cand.get("after_page")
             text_diff_val = cand.get("text_diff", 0.0)
 
-            # 強制讓 Slot 16（包含 Figure 5-2, Figure 5-17, Table 5-6 的對照頁）進入 LLM
             is_high_conf_reflow = False
-            if int(cand.get("slot", -1)) == 16:
-                is_high_conf_reflow = False
-            elif state == "paired" and bp is not None and ap is not None:
+            if state == "paired" and bp is not None and ap is not None:
                 offset = abs(int(ap) - int(bp))
                 # 1. 內容幾乎完全相同（可能伴隨任何不等的頁碼平移，例如: 12->23）
                 if text_diff_val < 0.01:
