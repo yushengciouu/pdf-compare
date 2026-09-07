@@ -578,7 +578,6 @@ def _build_prompt(
 請嚴格依照以下 JSON 格式回傳，不要輸出任何格式說明文字，只輸出 JSON：
 
 {
-  "overall_summary": "（一句話描述整份文件的主要變更）",
   "pages": [
     {
       "slot": <槽位編號，整數>,
@@ -1834,7 +1833,7 @@ def build_analyze_report(
             slot_to_changes=slot_to_changes,
         )
 
-        overall_summary = _generate_overall_summary(merged_pages, settings)
+        overall_summary = ""
 
         return {
             "summary": prefilter_report["summary"],

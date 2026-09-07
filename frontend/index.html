@@ -907,12 +907,6 @@
             `LLM 分析完成：共分析 ${pages.length} 個差異頁面（候選 ${summary.candidate_pages || 0} / ${summary.total_slots || 0} 頁）`
           );
 
-          // 整體摘要
-          if (data.overall_summary) {
-            analyzeOverallEl.style.display = "block";
-            analyzeOverallEl.textContent = `整體摘要：${data.overall_summary}`;
-          }
-
           // 各頁結果
           if (!pages.length) {
             const empty = document.createElement("div");
@@ -986,7 +980,9 @@
             head.appendChild(jumpBtn);
             item.appendChild(head);
 
-            if (p.summary && p.summary.trim()) {
+            const changesList = p.changes || [];
+            // 若該槽位沒有變更清單（如純排版位移），才顯示單頁說明，避免與下方變更列表重複
+            if (p.summary && p.summary.trim() && changesList.length === 0) {
               const summaryDiv = document.createElement("div");
               summaryDiv.className = "analyze-summary-text";
               summaryDiv.textContent = p.summary;
@@ -995,7 +991,6 @@
 
             const ul = document.createElement("ul");
             ul.className = "analyze-changes";
-            const changesList = p.changes || [];
             changesList.forEach((c) => {
               const li = document.createElement("li");
               li.className = c.type;
