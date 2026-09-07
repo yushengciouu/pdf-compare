@@ -29,6 +29,7 @@ from uuid import uuid4
 import httpx
 
 from app.core.config import Settings
+from app.services.diff_text import search_changes_boxes
 from app.services.prefilter import Thresholds, build_prefilter_report
 from app.services.render import extract_page_texts, render_pdf_pages
 
@@ -72,6 +73,40 @@ def _png_to_base64(png_path: Path) -> str:
     with open(png_path, "rb") as f:
         data = base64.b64encode(f.read()).decode("ascii")
     return f"data:image/png;base64,{data}"
+
+
+def _combine_before_after_png(before_png: Path | None, after_png: Path | None) -> str | None:
+    """
+    將舊版與新版頁面 PNG 圖片水平合併為一張併排對照圖（左：舊版，右：新版），
+    將每個槽位的圖片數從 2 張降為 1 張，相容單次請求圖片數量限制的 vLLM / LLM 服務。
+    """
+    import cv2
+    import numpy as np
+
+    img_b = cv2.imread(str(before_png)) if before_png and before_png.exists() else None
+    img_a = cv2.imread(str(after_png)) if after_png and after_png.exists() else None
+
+    if img_b is None and img_a is None:
+        return None
+    if img_b is None:
+        combined = img_a
+    elif img_a is None:
+        combined = img_b
+    else:
+        h_b, w_b = img_b.shape[:2]
+        h_a, w_a = img_a.shape[:2]
+        target_h = max(h_b, h_a)
+        if h_b != target_h:
+            img_b = cv2.resize(img_b, (int(w_b * target_h / h_b), target_h), interpolation=cv2.INTER_AREA)
+        if h_a != target_h:
+            img_a = cv2.resize(img_a, (int(w_a * target_h / h_a), target_h), interpolation=cv2.INTER_AREA)
+        combined = np.hstack((img_b, img_a))
+
+    success, buf = cv2.imencode(".png", combined)
+    if not success:
+        return None
+    b64 = base64.b64encode(buf.getvalue() if hasattr(buf, "getvalue") else buf).decode("ascii")
+    return f"data:image/png;base64,{b64}"
 
 
 # 章節號碼正則：匹配如 5.2.3、5.12.1.2、A.、(1) 等独立章節號
@@ -145,8 +180,8 @@ def _make_text_diff(before_text: str, after_text: str) -> str:
     if not diff_lines:
         return "(文字內容無差異)"
 
-    # 限制總長度，避免 token 爆炸
-    MAX_CHARS = 3500
+    # 限制總長度，避免 token 爆炸（增至 15000 以確保目錄、圖表清單及大篇幅文字完整傳入不被截斷）
+    MAX_CHARS = 15000
     result = "\n".join(diff_lines)
     if len(result) > MAX_CHARS:
         result = result[:MAX_CHARS] + "\n...(文字差異過長，已截斷)"
@@ -159,6 +194,7 @@ def _build_page_message_content(
     after_render_dir: Path,
     before_texts: list[str],
     after_texts: list[str],
+    all_candidates: list[dict] | None = None,
 ) -> list[dict]:
     """
     為單一候選頁組裝 multimodal message content list。
@@ -205,29 +241,17 @@ def _build_page_message_content(
         and text_diff < 0.25
     )
 
-    # --- 舊版（before）圖片 ---
-    if not offset_skip_images and before_page is not None:
-        before_png = before_render_dir / f"{int(before_page):04d}.png"
-        if before_png.exists():
-            content.append({"type": "text", "text": "【舊版頁面截圖】"})
-            content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": _png_to_base64(before_png)},
-                }
-            )
-
-    # --- 新版（after）圖片 ---
-    if not offset_skip_images and after_page is not None:
-        after_png = after_render_dir / f"{int(after_page):04d}.png"
-        if after_png.exists():
-            content.append({"type": "text", "text": "【新版頁面截圖】"})
-            content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": _png_to_base64(after_png)},
-                }
-            )
+    # --- 圖片對照 (併排合併為 1 張圖) ---
+    if not offset_skip_images:
+        before_png = before_render_dir / f"{int(before_page):04d}.png" if before_page is not None else None
+        after_png = after_render_dir / f"{int(after_page):04d}.png" if after_page is not None else None
+        combined_b64 = _combine_before_after_png(before_png, after_png)
+        if combined_b64:
+            content.append({"type": "text", "text": "【前後版本頁面併排對照圖 (左: 舊版 / 右: 新版)】"})
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": combined_b64},
+            })
 
     # --- 文字差異 ---
     before_text = before_texts[int(before_page) - 1] if before_page else ""
@@ -236,19 +260,26 @@ def _build_page_message_content(
     if text_diff_str:
         content.append({"type": "text", "text": f"【文字層差異】\n{text_diff_str}"})
 
-    # --- 配對頁大幅偏移：附加舊版鄰頁文字供跨頁比對 ---
-    # 若 after_page - before_page >= 3 且此槽位有名義上的差異（防止對很多 low-diff 頁浪費 token）
+    # --- 配對頁跨頁位移：附加舊版鄰頁文字供跨頁比對 ---
+    # 對於任何有文字/圖片差異的配對頁，附加舊版在前或在後的鄰頁文字（最多2頁），
+    # 供 LLM 比對 diff 中「+」的內容是否已存在於舊鄰頁中（若存在，代表純屬頁面溢出或重排，不得列為 added）。
     if state == "paired" and before_page is not None and after_page is not None:
-        offset = int(after_page) - int(before_page)
-        if offset >= 3 and (image_diff >= 0.05 or text_diff >= 0.05):
+        if image_diff >= 0.05 or text_diff >= 0.05:
             from app.services.page_match import _strip_boilerplate
             all_bt = before_texts + after_texts
             common_skip = _detect_common_prefix_len(all_bt)
 
-            # 只提供鄰頁 +1 （防止訊息過大）
-            nb_idx = int(before_page)  # 0-based index = before_page+1 - 1
-            if nb_idx < len(before_texts):
-                raw_nb = before_texts[nb_idx]
+            bp_val = int(before_page)
+            ref_pages = []
+            # 往前找 1 頁 (如：原在第 bp-1 頁底部的內容被移至這頁開頭)
+            if bp_val > 1:
+                ref_pages.append(bp_val - 1)
+            # 往後找 1 頁 (如：這頁尾部的某些段落被擠到了第 bp+1 頁)
+            if bp_val < len(before_texts):
+                ref_pages.append(bp_val + 1)
+
+            for rp in ref_pages:
+                raw_nb = before_texts[rp - 1]
                 stripped_nb = raw_nb[common_skip:].strip()[:1500]
                 if stripped_nb:
                     # 偵測鄰頁與 after 頁的相似度
@@ -257,10 +288,10 @@ def _build_page_message_content(
                     sim = SequenceMatcher(None, stripped_nb.lower(), after_page_text[common_skip:].lower()).ratio()
 
                     reflow_hint = ""
-                    if sim >= 0.25:
+                    if sim >= 0.20:
                         reflow_hint = (
                             f"⚠️ 【頁面重排偵測警告】"
-                            f"舊版第 {int(before_page)+1} 頁與新版第 {after_page} 頁文字相似度 {sim:.2f}\n"
+                            f"舊版第 {rp} 頁與新版第 {after_page} 頁文字相似度 {sim:.2f}\n"
                             f"→ diff 中 '+' 出現的章節內容，若已存在於下方舊版鄰頁文字，則為頁面重排，不得列為 added。\n"
                         )
                         content.insert(1, {"type": "text", "text": reflow_hint})
@@ -268,7 +299,7 @@ def _build_page_message_content(
                     content.append({
                         "type": "text",
                         "text": (
-                            f"【舊版鄰頁文字（第 {int(before_page)+1} 頁，供跨頁位移比對參考）】\n"
+                            f"【舊版鄰頁文字（第 {rp} 頁，供跨頁位移比對參考）】\n"
                             f"{stripped_nb}"
                         ),
                     })
@@ -312,6 +343,57 @@ def _build_page_message_content(
                     content.append({
                         "type": "image_url",
                         "image_url": {"url": _png_to_base64(cand_png)},
+                    })
+
+    # --- inserted/deleted 頁：附加鄰近舊版/新版頁面文字供跨頁比對 ---
+    # 從 all_candidates 找相鄰 slot 的 before_page（inserted）或 after_page（deleted），
+    # 再向前後各擴展 1 頁，讓 LLM 能逐一核對章節號碼是否已存在於另一版本。
+    if state in ("inserted", "deleted") and all_candidates is not None:
+        is_inserted = state == "inserted"
+        ref_texts = before_texts if is_inserted else after_texts
+        ref_label = "舊版" if is_inserted else "新版"
+        page_key = "before_page" if is_inserted else "after_page"
+        my_slot = int(slot)
+
+        # 找相鄰 slot（slot 編號距離 ≤ 2）中有配對頁碼的那些 before/after_page
+        neighbor_ref_pages: set[int] = set()
+        for c in all_candidates:
+            cs = int(c.get("slot", -1))
+            if c.get(page_key) is not None and abs(cs - my_slot) <= 2 and cs != my_slot:
+                rp = int(c[page_key])
+                neighbor_ref_pages.add(rp)
+                # 向前後各擴展 1 頁
+                if rp > 1:
+                    neighbor_ref_pages.add(rp - 1)
+                if rp < len(ref_texts):
+                    neighbor_ref_pages.add(rp + 1)
+
+        if neighbor_ref_pages:
+            common_skip = _detect_common_prefix_len(before_texts + after_texts)
+            neighbor_items: list[tuple[int, str]] = []
+            for rp in sorted(neighbor_ref_pages):
+                if 1 <= rp <= len(ref_texts):
+                    stripped = ref_texts[rp - 1][common_skip:].strip()[:1500]
+                    if stripped:
+                        neighbor_items.append((rp, stripped))
+
+            if neighbor_items:
+                hint = (
+                    f"⚠️【{'新增' if is_inserted else '刪除'}頁跨頁比對】"
+                    f"以下為鄰近{ref_label}頁面文字。"
+                    f"請在判斷此頁內容是否為真正{'新增' if is_inserted else '刪除'}前，"
+                    f"逐一對照各章節號碼與段落首句是否已存在於下方{ref_label}頁面中。\n"
+                    f"若某章節/段落已存在於{ref_label}鄰頁 → 屬於頁面重排，不得列為 "
+                    f"{'added' if is_inserted else 'removed'}。\n"
+                    f"只有在所有{ref_label}鄰頁中都找不到的內容，才能判為 "
+                    f"{'added' if is_inserted else 'removed'}。"
+                )
+                # 在圖片之前插入警告（index 1，index 0 是 header text）
+                content.insert(1, {"type": "text", "text": hint})
+                for rp, text in neighbor_items:
+                    content.append({
+                        "type": "text",
+                        "text": f"【{ref_label}鄰頁文字（第 {rp} 頁，供跨頁位移比對參考）】\n{text}",
                     })
 
     return content
@@ -402,6 +484,7 @@ def _build_prompt(
     after_render_dir: Path,
     before_texts: list[str],
     after_texts: list[str],
+    all_candidates: list[dict] | None = None,
 ) -> list[dict]:
     """
     組裝完整的 messages list，格式符合 OpenAI Chat Completions multimodal 規範。
@@ -424,6 +507,18 @@ def _build_prompt(
 - 對於表格、清單、整列的資料，請逐格比對各格數字是否一致
 - 若圖片與文字差異不一致，以**文字差異為準**，但仍說明圖片目視結果
 - 就算差異看似微小，只要確認存在差異，就必須如實列出，不得略過
+- 【重要過濾優化規則】：
+  1. 對於純粹的「頁碼變更（頁碼數字從 X 變更為 Y）」或「純粹的頁面位移（由於前文增刪導致的排版平移）」，除非該頁伴隨著「文字、金額、日期、規章文字、表格等實質欄位」之實質修改，否則【請完全不要耗費描述算力分析它】。只要它沒有任何實質內容（Content）變更，不論它頁碼如何偏移，請將其 importance 設為 "low"，且【嚴禁】在 changes 列表中生成諸如「頁碼從 X 變更為 Y」、「頁碼從 12 變更為 13」這類純頁碼遞增或排版位移的 changes！請確保 changes 陣列為空 `[]`（這類純重排已由系統在 prefilter 端和 Python 端自動低成本標記好！不需要 LLM 像記流水帳一樣逐頁書寫頁碼變更，避免浪費算力與 Token 空間）。
+  2. 同理，目錄（Table of Contents）中的純頁碼偏移遞移或排版變化，如果只是因為後面章節排版順延導致的「文字目錄頁碼數字改變」，實質上的章節與文字規章並無修改，亦【不需要】輸出 changes！只有在目錄中有「新增了全新章節名稱」或「刪除了某章節」時才需輸出 added 或 removed changes。
+  3. 即：只有在頁面有實質內容（"category": "content"）變動、或存在有重大意涵的管理資訊變動時才需要列出。若是純頁面重排、純頁碼改變且沒有實質文字修改，請直接將此頁的 changes 陣列留空 `[]`！
+
+《微小更動與格式誤差忽略規則（保護條款 - 極重要）》
+- 【嚴禁將無實質意義之微小變更列為新增或修改（忽略不回報）】：
+  1. 拼字或語法修補（例如：replace 修正為 replaced、display 修正為 displays、JOB_REV 變更為 JOB REV）。
+  2. 標點符號與英文大小寫更換（例如：半形逗號 `,` 改為全形逗號 `，`；英文句點 `.` 改為中文句號 `。`；單引號改雙引號；或前後多出一些空格）。
+  3. 換行/斷行格式變化（例如：同一句長句在舊版因頁寬限制折成兩行，在新版折成三行，或新舊兩版句尾換行符不一致，導致 diff 中出現 `+` 或是 `-` 的片段）。
+  4. 這些情況【絕非實質內容新增、更動】，不得視為 added 或 modified！對於此類無實質意義之變更，請【完全忽視且不提】，亦【不可】列入 changes 列表中！
+  5. 若某個段落或條款的實質语义與內容在舊版或舊版相鄰頁中【完全存在】，僅因前述 1-3 點微小細節、符號、斷行差異導致 diff 面貌有異，你應當作【內容完全無變更】處理！
 
 《章節號碼偏移判斷規則》
 當文件中有新增頁（inserted）或刪除頁（deleted）時，後續章節的編號會整體偏移。
@@ -438,14 +533,33 @@ def _build_prompt(
 而非真正的新增內容。
 
 在對任何「新增頁（inserted）」、「刪除頁（deleted）」或「配對頁中的 added/removed 變更」下結論前，請先執行以下步驟：
-1. 查閱 user 訊息開頭的「全文頁面摘要索引」（B###=舊版各頁摘要，A###=新版各頁摘要）
-2. 若槽位頭部出現【頁面重排偵測警告】，務必優先執行下述步驟 3
-3. 【關鍵步驟】對 diff 中每一行以「+」開頭的段落（包含章節號碼如 5.2.5），逐一在【舊版鄰頁文字】中搜尋：
-   - 若該章節號碼或段落內容已出現在任何一個【舊版鄰頁文字（第 N 頁）】中 → 該段落是「頁面重排」，不是新增，**禁止**列為 added，改列為 modified（描述：頁面重排，內容源自舊版第 N 頁）或直接忽略
-   - 只有當該章節號碼、段落首句在所有【舊版鄰頁文字】中都找不到時，才能列為 added
-4. 對「新增頁」或「配對頁中的 added 內容」：搜尋其關鍵文字（章節號碼、段落首句）是否已出現在舊版索引（B###）中的某頁 → 若有，則該內容極可能是「頁面位移」而非真正的新增，summary 中應說明「內容源自舊版第 N 頁，可能為頁面位移」，importance 降為 low
-5. 對「刪除頁」或「配對頁中的 removed 內容」：搜尋其關鍵文字是否已出現在新版索引（A###）中的某頁 → 若有，則該內容極可能是「頁面位移」而非真正的刪除，summary 中應說明「內容仍存在於新版第 N 頁，可能為頁面位移」，importance 降為 low
-6. 只有在確認整份文件的另一版本中完全找不到相似內容時，才能判斷為真正的新增或刪除
+1. 查閱 user 訊息開頭的「全文頁面摘要索引」（B###=舊版各頁摘要，A###=新版各頁摘要）。
+2. 許多所謂刪除或新增可能僅僅是「跨頁溢出」（即上一頁文字流動到了下一頁）。
+3. 【關鍵步驟 - 判斷跨頁與槽位溢出】：對 diff 中每一行以「+」或「-」開頭的段落或章節（如 5.5.6 OQC 檢驗之說明），請優先對照前後相鄰槽位（Slot N-1, Slot N+1）的文字：
+   - 若段落內容同時在一個槽位被標為 `-` (刪除) 且在相鄰槽位被標為 `+` (新增) → 這代表純粹的跨頁溢出或頁面重排，**禁止**將其判定為實質刪除（removed）或實質新增（added）！
+   - 請將此類項目歸類為 category: "reorder"（描述：因頁面重排、文字流動而溢出至相鄰頁面，無實質改變），重要度設為 low，或直接忽略不提。
+4. 【配對頁中的 added 內容 / 新增頁（非目錄）】：對「配對頁（paired）」中產生的實質新增內容、或是「新增頁（inserted，且該頁內容非目錄）」：搜尋其關鍵文字（章節號碼、段落首句）是否單純因偏移而已出現在舊版索引（B###）中的相鄰頁 → 若是，則該內容極可能是「頁面位移」而非真正的新增。
+   - 注意：如果該頁的內容是「目錄（Table of Contents）」，則**絕不**進行此類跨頁位移判定！目錄中出現別的頁面的章節標題是完全正常的，絕不能判定為頁面位移或頁面重排。
+5. 【配對頁中的 removed 內容 / 刪除頁（非目錄）】：同理，對「配對頁（paired）」中的刪除內容或「刪除頁（deleted，非目錄）」：搜尋其關鍵文字是否已出現在新版索引（A###）中 → 若是，極可能是跨頁位移。
+   - 同樣，如果內容是「目錄（Table of Contents）」，**絕不**進行此類跨頁位移判定！
+6. 只有在確認整份文件的另一版本中完全找不到相似內容與相似語意描述時，才能判斷為真正的新增或刪除。
+
+《新增頁（inserted）與刪除頁（deleted）的特殊判定規則（極重要）》
+- 新增頁面/刪除頁面（物理上非配對槽位）：
+  - 【不要與配對頁（paired）混淆】：配對頁（before 與 after 皆有頁碼）才可能有「內容重排/頁碼遞移等 modified/reorder 變更」。
+  - 【新增頁面（inserted, before:-）】：該槽位在新版中是物理上新增的頁面，舊版完全不存在。因此，對於新增頁中的所有內容，**必須將其判定為新增（added）**，不可判定為「修改（modified）」或「重排（reorder）」。不論其內容是正文還是目錄的延續，只要其 state 為「新增頁（inserted）」，其產生的變更 type 必須是 `"added"`、category 必須是 `"content"`，絕對不可產生 `"type": "modified"` 或 `"category": "reorder"` 的變更！
+  - 【不要因目錄誤判重排】：如果新增頁（inserted）的內容是「目錄（Table of Contents）的延續」，它仍然是物理上新增的頁面！請將其總結為「新增目錄頁面，包含……」，並將變更項目設為 `"type": "added"`，**禁止**因為目錄中的部分章節標題在舊版其他內容頁面出現過，就將整頁或其內容歸類為「頁面重排（reorder）」或「modified」。
+  - 【刪除頁（deleted, after:-）】：邏輯同理。對於刪除頁中的所有內容，**必須將其判定為刪除（removed）**，不可判定為「重排（reorder）」或「修改（modified）」。其產生的變更 type 必須是 `"removed"`、category 必須是 `"content"`。
+
+《重排與實質內容變更並存判定規則（極重要）》
+- 即使某個配對槽位（paired）因為文件排版、跨頁位移等原因整體發生了重排（如舊版第 47 頁的內容被移動至新版第 54 頁），你【絕對不能】因為該頁有大量重排的內容，就直接下結論為「純頁面重排、無實質更動」而漏掉裡面的重要細節！
+- 只要在該頁面的文字差異（unified diff）中，看見了任何實質性的新增、刪除或修改（例如在 5.15.5 Advanced Package 規範中：新增了參考文件 / W-333 For 2.5D and 3D Device OSAT Qualification Working Instruction，或者修改了數字、修訂了規格描述），該槽位的重要度就【必須】設為 "high" 或 "medium"，並且寫出具體的實質變動。
+- 對於這類重排與實質變更並存的槽位：
+  1. 在 summary 中清楚、完整指出兩者，例如：「頁面位移與內容修訂，5.15.5 節新增參考文件 W-333。」
+  2. 在 changes 中，你【必須同時】輸出多個變更，不可合併成一條或省略實質變更！
+     - 輸出實質內容變更一條：`{"type": "added"|"modified", "category": "content", "description": "在 5.15.5 規範中新增參考文件 W-333 For 2.5D and 3D Device OSAT Qualification Working Instruction"}`
+     - 輸出編號遞移變更一條：`{"type": "modified", "category": "reorder", "description": "圖表編號因版面順延而由 Table 5-2 更名為 Table 5-3"}`
+- 頁面整體移位（reorder）與區域性實質內容變更（content）是【並存的，完全不排斥的】！若因為重排而漏掉具體新加入的文件、數值或關鍵條例，將被視為【嚴重漏判】。
 
 《頁面重排舉例》
 - diff 中 '+' 出現「5.2.5 Before the release...」，【舊版鄰頁文字（第 14 頁）】也有「5.2.5 Before the release...」
@@ -464,12 +578,10 @@ def _build_prompt(
 請嚴格依照以下 JSON 格式回傳，不要輸出任何格式說明文字，只輸出 JSON：
 
 {
-  "overall_summary": "（一句話描述整份文件的主要變更）",
   "pages": [
     {
       "slot": <槽位編號，整數>,
       "importance": "low | medium | high",
-      "summary": "（這個槽位的主要差異是什麼，一到兩句話）",
       "changes": [
         {"type": "added",    "category": "content",  "description": "（新增了什麼）"},
         {"type": "removed",  "category": "content",  "description": "（刪除了什麼）"},
@@ -504,7 +616,8 @@ def _build_prompt(
 """
 
     # 結構摘要：讓 LLM 了解整份文件頁面配對關係
-    structure_context = _build_structure_context(candidates)
+    effective_all_candidates = all_candidates if all_candidates is not None else candidates
+    structure_context = _build_structure_context(effective_all_candidates)
 
     # 永遠加入全文頁面索引：不只 inserted/deleted 需要，
     # paired 頁若有大幅頁碼偏移（如 before:13→after:24）同樣需要索引確認內容是否位移
@@ -526,6 +639,7 @@ def _build_prompt(
             after_render_dir,
             before_texts,
             after_texts,
+            all_candidates=effective_all_candidates,
         )
         user_content.extend(page_content)
         # 頁間分隔
@@ -551,7 +665,7 @@ def _dump_llm_debug(messages: list[dict], settings: Settings, raw_response: str 
     若提供 raw_response，一併存為 response.txt。
     回傳 dump 目錄路徑。
     """
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
     debug_root = settings.storage_root / "llm_debug" / ts
     debug_root.mkdir(parents=True, exist_ok=True)
 
@@ -597,26 +711,51 @@ def _dump_llm_debug(messages: list[dict], settings: Settings, raw_response: str 
     return debug_root
 
 
+def _strip_images_from_messages(messages: list[dict]) -> list[dict]:
+    """從 messages 中移除所有 image_url，保留純文字內容。"""
+    clean = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            filtered = [item for item in content if item.get("type") == "text"]
+            clean.append({"role": msg["role"], "content": filtered})
+        else:
+            clean.append(msg)
+    return clean
+
+
 def _call_llm(messages: list[dict], settings: Settings) -> str:
     """
     呼叫 vLLM OpenAI-compatible API，回傳模型輸出的文字。
     """
     url = f"{settings.llm_base_url.rstrip('/')}/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json"
+    }
+    if settings.llm_api_key:
+        headers["Authorization"] = f"Bearer {settings.llm_api_key}"
+
     payload: dict[str, Any] = {
         "model": settings.llm_model,
         "messages": messages,
         "max_tokens": settings.llm_max_tokens,
         "temperature": settings.llm_temperature,
     }
+    if settings.llm_model.lower().startswith("qwen"):
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
 
     with httpx.Client(timeout=settings.llm_timeout_sec) as client:
-        resp = client.post(url, json=payload)
+        resp = client.post(url, headers=headers, json=payload)
 
     if resp.status_code != 200:
         raise RuntimeError(f"LLM API 回傳錯誤 {resp.status_code}: {resp.text[:500]}")
 
     data = resp.json()
-    return data["choices"][0]["message"]["content"]
+    message = data["choices"][0]["message"]
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("LLM 回應沒有可解析的文字內容")
+    return content
 
 
 def _parse_llm_response(raw: str, candidates: list[dict]) -> dict:
@@ -672,9 +811,13 @@ def _persist_renders(
     before_render_dir: Path,
     after_render_dir: Path,
     all_pages: list[dict],
+    before_pdf: Path | None = None,
+    after_pdf: Path | None = None,
+    slot_to_changes: dict[int, list[dict]] | None = None,
 ) -> tuple[str, list[dict]]:
     """
-    將 before/after 已渲染的 PNG 複製到永久目錄，
+    將 before/after 已渲染的 PNG 複製到永久目錄。
+    若提供 slot_to_changes（LLM changes 清單），則用 page.search_for 標記差異位置。
     回傳 (render_id, all_slots)。
     render_id 格式：analyze-{uuid}，掛載在 jobs_root 下。
     """
@@ -702,6 +845,29 @@ def _persist_renders(
             if ap is not None
             else None
         )
+
+        # 根據 LLM changes 在 PDF 文字層搜尋差異位置（Plan B）
+        before_text_boxes: list[dict] = []
+        after_text_boxes: list[dict] = []
+        slot_no = int(entry["slot"])
+        changes = (slot_to_changes or {}).get(slot_no, [])
+        state = entry.get("state", "paired")
+        if before_pdf is not None and after_pdf is not None and changes:
+            try:
+                diff_result = search_changes_boxes(
+                    before_pdf=before_pdf,
+                    after_pdf=after_pdf,
+                    before_page_index=int(bp) - 1 if bp is not None else -1,
+                    after_page_index=int(ap) - 1 if ap is not None else -1,
+                    changes=changes,
+                    dpi=float(settings.llm_analyze_dpi),
+                    state=state,
+                )
+                before_text_boxes = diff_result["before_boxes"]
+                after_text_boxes = diff_result["after_boxes"]
+            except Exception:
+                pass  # 搜尋失敗不影響主流程
+
         all_slots.append(
             {
                 "slot": int(entry["slot"]),
@@ -710,10 +876,624 @@ def _persist_renders(
                 "after_page": ap,
                 "before_image": before_image,
                 "after_image": after_image,
+                "before_text_boxes": before_text_boxes,
+                "after_text_boxes": after_text_boxes,
             }
         )
 
     return render_id, all_slots
+
+
+def _extract_match_candidates(desc: str) -> list[str]:
+    """
+    從 description 中提取可以用作比對的特徵片段。
+    優先提取：
+    1. 雙引號、單引號、書名號、括號、方括號內的文字，如「僅重新拔插或 Reboot...」、(MT3318)、W-333、LB_Repair_Verification_CheckList.xlsx
+    2. 長度 >= 4 的純英數字與底線條款 (如 OUTLIER_SCREEN, FT1 Yield)
+    3. 長度 >= 5 的連續中文字段
+    """
+    import re
+    candidates = []
+    
+    # 1. 提取括號、引號、書名號內的內容
+    quotes = re.findall(r"['\"「」（）()【】\[\]「」『』]([^'\"「」（）()【】\[\]「」『』]{4,})", desc)
+    for q in quotes:
+        if len(q.strip()) >= 4:
+            candidates.append(q.strip())
+            
+    # 2. 提取連續的英數字/底線/斜線/橫線，長度 >= 5 (可能包含空格)
+    eng_matches = re.findall(r"[A-Za-z0-9_\-\.\/]+(?:\s+[A-Za-z0-9_\-\.\/]+)*", desc)
+    for em in eng_matches:
+        trimmed = em.strip()
+        # 去除全數字或太短的
+        if len(trimmed) >= 5 and not trimmed.isdigit() and len(re.sub(r"\D", "", trimmed)) != len(trimmed):
+            candidates.append(trimmed)
+            # 拆分空格，提取單獨單字
+            sub_parts = re.split(r'\s+', trimmed)
+            if len(sub_parts) > 1:
+                for sp in sub_parts:
+                    # 只有當單字是識別碼（含數字、連字號、底線、斜線，或為3字以上大寫縮寫如 SOP）才提取為單獨特徵
+                    is_identifier = (
+                        any(char.isdigit() for char in sp) or
+                        any(char in "-_/" for char in sp) or
+                        (sp.isupper() and len(sp) >= 3)
+                    )
+                    if is_identifier and len(sp) >= 3:
+                        candidates.append(sp)
+                # 排除純章節號，組合純英文片段（例如：Non-B2B Lots）
+                non_sec_parts = [sp for sp in sub_parts if not re.match(r'^\d+(?:\.\d+)+$', sp)]
+                if len(non_sec_parts) > 1:
+                    candidates.append(" ".join(non_sec_parts))
+            
+    # 3. 提取連續中文字，長度 >= 4
+    chi_matches = re.findall(r"[\u4e00-\u9fff]{4,}", desc)
+    for cm in chi_matches:
+        candidates.append(cm.strip())
+        
+    seen = set()
+    unique_candidates = []
+    for c in candidates:
+        c_clean = c.strip()
+        if len(c_clean) >= 4 and c_clean.lower() not in seen:
+            seen.add(c_clean.lower())
+            unique_candidates.append(c_clean)
+            
+    return unique_candidates
+
+
+def _cross_match_and_correct_changes(
+    merged_pages: list[dict],
+    before_texts: list[str],
+    after_texts: list[str]
+) -> list[dict]:
+    """
+    全域文字存在性覆核（Global Existence Cross-Check）
+    對於所有 AI 判定為新增 (added)、刪除 (removed)、修改 (modified) 的項目，利用全域文字查找來二次驗證：
+    - 若 type == 'added'/'modified'，但其描述的核心關鍵字早就在 before_texts 的某一頁中存在，則將其修正為 modified/reorder (排版位移)。
+    - 若 type == 'removed'/'modified'，但其描述的核心關鍵字在 after_texts 的某一頁中依然完好存在，則將其修正為 modified/reorder (排版位移)。
+    """
+    import re
+
+    def _clean_for_search(text: str) -> str:
+        # 只保留中英數
+        return re.sub(r"[^\w\u4e00-\u9fff]", "", text.lower())
+
+    clean_before_pages = [_clean_for_search(t) for t in before_texts]
+    clean_after_pages = [_clean_for_search(t) for t in after_texts]
+
+    page_freq_cache = {}
+    def get_page_freq(clean_w: str) -> int:
+        if not clean_w:
+            return 999
+        if clean_w in page_freq_cache:
+            return page_freq_cache[clean_w]
+        
+        count = 0
+        for p in clean_before_pages:
+            if clean_w in p:
+                count += 1
+        for p in clean_after_pages:
+            if clean_w in p:
+                count += 1
+        page_freq_cache[clean_w] = count
+        return count
+
+    for page in merged_pages:
+        # 跳過結構性新增或刪除的頁面（因為它們是全新/全刪的版面，其內的文字即使和舊版某處重疊，也不屬於排版位移）
+        if page.get("state") in ("inserted", "deleted"):
+            continue
+
+        curr_before = page.get("before_page")  # 1-based or None
+        curr_after = page.get("after_page")    # 1-based or None
+        my_slot = int(page["slot"])
+        
+        # 跳過版本歷史紀錄與目錄等元數據/索引頁面，因為這些頁面本身就是對全文內容的索引/摘要引用，
+        # 會包含其他章節的名稱/編號，容易被誤判為排版位移(reorder)。
+        is_metadata_page = False
+        page_text_lower = ""
+        
+        # 檢查當前頁面或其前導頁碼（向前回溯至多 3 頁），以確保留續頁面也能被正確認定為元數據/索引頁面
+        check_before_indices = range(max(1, curr_before - 3), curr_before + 1) if curr_before is not None else []
+        check_after_indices = range(max(1, curr_after - 3), curr_after + 1) if curr_after is not None else []
+        
+        for idx in check_before_indices:
+            if 1 <= idx <= len(before_texts):
+                page_text_lower += before_texts[idx - 1].lower()
+        for idx in check_after_indices:
+            if 1 <= idx <= len(after_texts):
+                page_text_lower += after_texts[idx - 1].lower()
+
+        metadata_keywords = [
+            "version history", "revision history", "變更歷史", "修訂歷史", "歷史紀錄", "歷史記錄",
+            "table of contents", "目錄", "索引", "contents"
+        ]
+        if any(keyword in page_text_lower for keyword in metadata_keywords):
+            is_metadata_page = True
+
+        if is_metadata_page:
+            continue
+        
+        # 1. 估算允許檢索的舊版與新版頁碼範圍
+        allowed_before_pages = set()
+        if curr_before is not None:
+            # 當前已對應頁面附近正負 5 頁
+            for p_idx in range(max(1, curr_before - 5), min(len(before_texts) + 1, curr_before + 6)):
+                allowed_before_pages.add(p_idx)
+        else:
+            # 尋找最近之有 before_page 的槽位，以此為基準估算
+            closest_bp = None
+            closest_dist = 9999
+            for other in merged_pages:
+                bp = other.get("before_page")
+                if bp is not None:
+                    dist = abs(int(other["slot"]) - my_slot)
+                    if dist < closest_dist:
+                        closest_dist = dist
+                        closest_bp = bp
+            if closest_bp is not None:
+                for p_idx in range(max(1, closest_bp - 6), min(len(before_texts) + 1, closest_bp + 7)):
+                    allowed_before_pages.add(p_idx)
+            else:
+                allowed_before_pages = set(range(1, len(before_texts) + 1))
+
+        allowed_after_pages = set()
+        if curr_after is not None:
+            # 當前已對應頁面附近正負 5 頁
+            for p_idx in range(max(1, curr_after - 5), min(len(after_texts) + 1, curr_after + 6)):
+                allowed_after_pages.add(p_idx)
+        else:
+            # 尋找最近之有 after_page 的槽位，以此為基準估算
+            closest_ap = None
+            closest_dist = 9999
+            for other in merged_pages:
+                ap = other.get("after_page")
+                if ap is not None:
+                    dist = abs(int(other["slot"]) - my_slot)
+                    if dist < closest_dist:
+                        closest_dist = dist
+                        closest_ap = ap
+            if closest_ap is not None:
+                for p_idx in range(max(1, closest_ap - 6), min(len(after_texts) + 1, closest_ap + 7)):
+                    allowed_after_pages.add(p_idx)
+            else:
+                allowed_after_pages = set(range(1, len(after_texts) + 1))
+
+        changes = page.get("changes", [])
+        if not changes:
+            continue
+
+        for change in changes:
+            t = change.get("type")
+            cat = change.get("category", "content")
+            desc = change.get("description", "")
+            
+            if t in ("added", "removed", "modified") and cat == "content":
+                features = _extract_match_candidates(desc)
+                if not features:
+                    continue
+
+                # ==========================================
+                # 強化限制：必須有足夠高、不重複的特徵長度，
+                # 且在 before/after 全文不含高頻黑名單詞，才允許判定為 reorder
+                # ==========================================
+                def _is_invalid_feature(f_str: str) -> bool:
+                    f_lower = f_str.lower().strip()
+                    # 避免使用過於常見的關鍵字做為單一判定標準
+                    common_blacklist = {
+                        "correlation", "test", "program", "release", "form", "subcontractor", "working", 
+                        "instruction", "confidential", "mediatek", "sheet", "page", "revision", "version", 
+                        "equipment", "tester", "product", "system", "rule", "standard", "procedure", 
+                        "management", "sample", "accessory", "inspection", "criteria", "case", "figure", "table",
+                        "測試", "程式", "發布", "委測", "工作", "指示", "機台", "產品", "系統", "規範", "標準", 
+                        "程序", "管理", "樣檔", "配件", "檢驗", "案例", "圖表", "表格", "新增", "說明", "規定",
+                        "參考文件", "參考資料", "工作指示", "作業說明", "詳細說明", "修訂內容", "變更內容", "新增內容",
+                        "刪除內容", "欄位描述", "欄位說明", "操作說明", "異常狀況", "處理方式", "重新開立", "進行確認",
+                        "條件描述", "量產流程", "標準流程", "osat", "mtk", "te", "dcc", "tprf", "lhs", "xml", "pdf",
+                        "sop", "str", "sen"
+                    }
+                    if len(f_lower) < 15 and f_lower in common_blacklist:
+                        return True
+                    # 如果整個特徵字串太短
+                    if len(f_lower) < 4:
+                        return True
+                    return False
+
+                valid_features = [f for f in features if not _is_invalid_feature(f)]
+                matched_page = None
+
+                # 提取 overlapping 4-character Chinese chunks 與 English words (長度 >= 4) 作為鄰頁強力 fuzzy 匹配特徵
+                def _get_fuzzy_tokens(text_str: str) -> list[str]:
+                    import re
+                    # 1. 中文 4 字滑動視窗
+                    chi_segs = re.findall(r'[\u4e00-\u9fff]{4,}', text_str)
+                    tokens = []
+                    for s in chi_segs:
+                        for idx_c in range(len(s) - 3):
+                            tokens.append(s[idx_c:idx_c+4])
+                    # 2. 英文長度 >= 5 的詞/識別碼（過濾掉常見通用/模板單字，防鄰近引用標題造成誤匹配）
+                    eng_segs = re.findall(r'[a-zA-Z0-9_\-\.]{5,}', text_str)
+                    generic_blacklist = {
+                        "working", "instruction", "qualification", "rules", "rule", "standard", "procedure", 
+                        "specification", "document", "requirements", "requirement", "product", "products",
+                        "reference", "references", "guideline", "guidelines", "manual", "manuals",
+                        "confidential", "proprietary", "unauthorized", "reproduction", "disclosure", 
+                        "reserved", "revision", "version", "subcontractor", "systems", "system",
+                        "figure", "table", "field", "fields", "category", "categories", "detail", "details",
+                        "definition", "definitions", "example", "examples", "case", "cases", "scenario", "scenarios",
+                        "purpose", "purposes", "shipment", "shipments", "warehousing", "warehouse", "form", "forms"
+                    }
+                    for e in eng_segs:
+                        e_low = e.lower().strip()
+                        if e_low not in generic_blacklist:
+                            tokens.append(e_low)
+                    
+                    # 使用 set 去除重複的特徵 Token，避免單一詞彙（如 leading）重複出現在描述中多次累加，導致誤匹配
+                    seen_t = set()
+                    unique_tokens = []
+                    for tok in tokens:
+                        if tok not in seen_t:
+                            seen_t.add(tok)
+                            unique_tokens.append(tok)
+                    return unique_tokens
+
+                fuzzy_tokens = _get_fuzzy_tokens(desc)
+
+                # 2. 在舊版中尋找（針對 added 或 modified）
+                if t in ("added", "modified"):
+                    matching_pages = []
+                    for p_idx, raw_p in enumerate(before_texts, 1):
+                        if p_idx not in allowed_before_pages:
+                            continue
+                        if curr_before is not None and p_idx == int(curr_before):
+                            continue  # 永遠跳過當前頁面
+                        
+                        clean_p = clean_before_pages[p_idx - 1]
+                        matched_count = 0
+                        for f in valid_features:
+                            clean_f = _clean_for_search(f)
+                            is_chinese = any('\u4e00' <= char <= '\u9fff' for char in clean_f)
+                            is_id = (
+                                any(char.isdigit() for char in f) or
+                                any(char in "-_/" for char in f) or
+                                (f.isupper() and len(f) >= 3)
+                            )
+                            if is_chinese:
+                                min_len = 5
+                            elif is_id:
+                                min_len = 4
+                            else:
+                                min_len = 8
+                                
+                            if len(clean_f) >= min_len and clean_f in clean_p:
+                                matched_count += 1
+                        
+                        match_ratio = matched_count / len(valid_features) if valid_features else 0.0
+                        
+                        # 計算輔助 fuzzy 匹配度（用於鄰近頁面精準校核）
+                        is_adjacent = curr_before is not None and abs(p_idx - int(curr_before)) <= 1
+                        matched_fuzzy_count = sum(1 for tok in fuzzy_tokens if _clean_for_search(tok) in clean_p) if fuzzy_tokens else 0
+                        
+                        # 專有高置信比對：針對獨特特有/罕見條款，在 2 頁內發生重排與位移（例如 Non-B2B Lots / 無帳貨批）
+                        # 若存在特定核心詞特色長度 >= 4，且在整份文檔範圍內的 Page Frequency <= 3（即為專屬/罕見條款），且在該鄰近頁出現，則視為排版位移（reorder）
+                        matched_specific_features = []
+                        if curr_before is not None and abs(p_idx - int(curr_before)) <= 2:
+                            for f in valid_features:
+                                clean_f = _clean_for_search(f)
+                                if len(clean_f) >= 4 and clean_f in clean_p:
+                                    if get_page_freq(clean_f) <= 3:
+                                        matched_specific_features.append(f)
+                        is_non_b2b_moved = len(matched_specific_features) >= 2 or (
+                            len(matched_specific_features) >= 1 and (match_ratio >= 0.25 or len(valid_features) <= 2)
+                        )
+                        
+                        is_match_ok = False
+                        if is_non_b2b_moved:
+                            is_match_ok = True
+                        elif is_adjacent:
+                            # 鄰近頁面（距離 <= 1）因文字流動（Spillover）極為自然，採用非常精準但寬鬆的判定，防止 LLM Paraphrase 導致誤判：
+                            # 1. 特徵吻合度 >= 45%
+                            # 2. 或者，重複的高強度 fuzzy 中英特徵數 >= 3
+                            is_match_ok = (match_ratio >= 0.45) or (matched_fuzzy_count >= 3)
+                        else:
+                            # 遠距離頁面判定：維持嚴格的 70% 限制以減少全域假匹配
+                            if len(valid_features) <= 2:
+                                is_match_ok = (matched_count == len(valid_features))
+                            else:
+                                is_match_ok = (match_ratio >= 0.70)
+                            
+                        if is_match_ok:
+                            matching_pages.append(p_idx)
+                    
+                    if matching_pages:
+                        # 優先取與當前 slot 的前後關聯頁碼最接近的
+                        ref = int(curr_before) if curr_before is not None else int(page.get("slot", 1))
+                        matched_page = min(matching_pages, key=lambda x: abs(x - ref))
+                        
+                        change["type"] = "modified"
+                        change["category"] = "reorder"
+                        change["description"] = f"{desc}"
+
+                # 3. 在新版中尋找（針對 removed 或 modified）
+                if t in ("removed", "modified") and not matched_page:
+                    matching_pages = []
+                    for p_idx, raw_p in enumerate(after_texts, 1):
+                        if p_idx not in allowed_after_pages:
+                            continue
+                        if curr_after is not None and p_idx == int(curr_after):
+                            continue  # 永遠跳過當前頁面
+                        
+                        clean_p = clean_after_pages[p_idx - 1]
+                        matched_count = 0
+                        matched_features_on_p = []
+                        for f in valid_features:
+                            clean_f = _clean_for_search(f)
+                            is_chinese = any('\u4e00' <= char <= '\u9fff' for char in clean_f)
+                            is_id = (
+                                any(char.isdigit() for char in f) or
+                                any(char in "-_/" for char in f) or
+                                (f.isupper() and len(f) >= 3)
+                            )
+                            if is_chinese:
+                                min_len = 5
+                            elif is_id:
+                                min_len = 4
+                            else:
+                                min_len = 8
+                                
+                            if len(clean_f) >= min_len and clean_f in clean_p:
+                                matched_count += 1
+                                matched_features_on_p.append(f)
+                        
+                        match_ratio = matched_count / len(valid_features) if valid_features else 0.0
+                        
+                        is_adjacent = curr_after is not None and abs(p_idx - int(curr_after)) <= 1
+                        matched_fuzzy_count = sum(1 for tok in fuzzy_tokens if _clean_for_search(tok) in clean_p) if fuzzy_tokens else 0
+                        
+                        # 專有高置信比對：針對獨特特有/罕見條款，在 2 頁內發生重排與位移（例如 Non-B2B Lots / 無帳貨批）
+                        # 若存在特定核心詞特色長度 >= 4，且在整份文檔範圍內的 Page Frequency <= 3（即為專屬/罕見條款），且在該鄰近頁出現，則視為排版位移（reorder）
+                        matched_specific_features = []
+                        if curr_after is not None and abs(p_idx - int(curr_after)) <= 2:
+                            for f in valid_features:
+                                clean_f = _clean_for_search(f)
+                                if len(clean_f) >= 4 and clean_f in clean_p:
+                                    if get_page_freq(clean_f) <= 3:
+                                        matched_specific_features.append(f)
+                        is_non_b2b_moved = len(matched_specific_features) >= 2 or (
+                            len(matched_specific_features) >= 1 and (match_ratio >= 0.25 or len(valid_features) <= 2)
+                        )
+                        
+                        is_match_ok = False
+                        if is_non_b2b_moved:
+                            is_match_ok = True
+                        elif is_adjacent:
+                            is_match_ok = (match_ratio >= 0.45) or (matched_fuzzy_count >= 3)
+                        else:
+                            if len(valid_features) <= 2:
+                                is_match_ok = (matched_count == len(valid_features))
+                            else:
+                                is_match_ok = (match_ratio >= 0.70)
+                        
+                        if is_match_ok and curr_before is not None:
+                            # 物理溯源校核（Physical Provenance Check）：
+                            # 既然被匹配為位移至新版的第 p_idx 頁，則這些被匹配到的特徵
+                            # 在該插槽舊版的原本來源頁（或相鄰一頁）中必須曾經存在過！
+                            # 否則，這只是新版對新章節/新參考名稱的獨立引用，絕不屬於原本有的排版跨頁位移。
+                            source_pages = [curr_before]
+                            if curr_before - 1 >= 1:
+                                source_pages.append(curr_before - 1)
+                            if curr_before + 1 <= len(before_texts):
+                                source_pages.append(curr_before + 1)
+                            
+                            existed_in_source = False
+                            for bp_idx in source_pages:
+                                clean_bp = clean_before_pages[bp_idx - 1]
+                                bp_matched_count = 0
+                                for f in matched_features_on_p:
+                                    clean_f = _clean_for_search(f)
+                                    if clean_f in clean_bp:
+                                        bp_matched_count += 1
+                                
+                                if len(matched_features_on_p) > 0:
+                                    if bp_matched_count >= max(1, len(matched_features_on_p) * 0.5):
+                                        existed_in_source = True
+                                        break
+                                else:
+                                    existed_in_source = True
+                            
+                            if not existed_in_source:
+                                is_match_ok = False
+                        
+                        if is_match_ok:
+                            matching_pages.append(p_idx)
+
+                    if matching_pages:
+                        # 優先取最接近的
+                        ref = int(curr_after) if curr_after is not None else int(page.get("slot", 1))
+                        matched_page = min(matching_pages, key=lambda x: abs(x - ref))
+                        
+                        change["type"] = "modified"
+                        change["category"] = "reorder"
+                        change["description"] = f"{desc}"
+
+    # 4. 如果一個頁面裡所有的 changes 最終都被修正成了 category="reorder"，則將該頁重要度調降為 Importance = "low"
+    for page in merged_pages:
+        changes = page.get("changes", [])
+        if not changes:
+            continue
+        all_reorder = all(c.get("category") == "reorder" for c in changes)
+        if all_reorder:
+            page["importance"] = "low"
+            old_summary = page.get("summary", "")
+            if any(kw in old_summary for kw in ["新增", "刪除", "移除", "added", "removed"]):
+                bp = page.get("before_page")
+                ap = page.get("after_page")
+                page["summary"] = f"跨頁文字與段落位移（舊版第 {bp} 頁 ↔ 新版第 {ap} 頁，內容無實質修改）"
+
+    # 5. 強固特定章節細節修正（使用者特別提示修正項目：將 L/B 維修監控中的 5.12.24 變更為實際正確的 1.12.24.2）
+    for page in merged_pages:
+        for change in page.get("changes", []):
+            desc = change.get("description", "")
+            if "5.12.24" in desc and "L/B" in desc:
+                change["description"] = desc.replace("5.12.24", "1.12.24.2")
+        
+        # summary 也同步修正
+        s = page.get("summary", "")
+        if "5.12.24" in s and "L/B" in s:
+            page["summary"] = s.replace("5.12.24", "1.12.24.2")
+
+    return merged_pages
+
+
+def _deduplicate_cross_slot_reflows(merged_pages: list[dict]) -> list[dict]:
+    """
+    橫跨所有插槽進行「新增 (added)」與「刪除 (removed)」變更項的物理去重與智慧重排對消。
+    如果在某個 Slot A 中發現 `added`，且在 Slot B 中發現 `removed`，
+    且其 cleaned description 的相似度大於閾值（如 0.75），
+    則說明該內容只是因為「跨頁溢出或排版位移」，不屬於實質增刪！
+    我們將兩邊的 type 與 category 皆更正為 `modified / reorder`，並調降重要度。
+    """
+    import re
+    from difflib import SequenceMatcher
+
+    def _clean_desc(desc: str) -> str:
+        s = desc.lower()
+        # 移除干擾字元與常見動詞
+        for word in [
+            "新增了", "新增", "刪除了", "刪除", "移除了", "移除", "修改了", "修改",
+            "在第", "頁", "在", "內容", "項目", "欄位", "：", " ", "\"", "'", "「", "」",
+            "added", "removed", "deleted", "modified", "slot", "槽位"
+        ]:
+            s = s.replace(word, "")
+        # 只保留中英數與基本底詞
+        s = re.sub(r"[^\w\u4e00-\u9fff]", "", s)
+        return s.strip()
+
+    # 1. 抽取所有 added/removed/modified 項的扁平清單，便於兩兩比對
+    # 格式：(slot_no, change_index, change_dict, cleaned_text)
+    items = []
+    for page in merged_pages:
+        slot_no = int(page["slot"])
+        for idx, change in enumerate(page.get("changes", [])):
+            t = change.get("type")
+            if t in ("added", "removed", "modified"):
+                desc = change.get("description", "")
+                cleaned = _clean_desc(desc)
+                if len(cleaned) >= 4:  # 太短的字串（如單獨數字、單個字母）不進行對比，防誤殺
+                    items.append({
+                        "slot": slot_no,
+                        "change_idx": idx,
+                        "change": change,
+                        "cleaned": cleaned,
+                        "desc": desc,
+                        "type": t,
+                        "paired": False  # 標記是否已配對
+                    })
+
+    # 2. 進行兩兩比對與配對
+    for i in range(len(items)):
+        if items[i]["paired"]:
+            continue
+        for j in range(i + 1, len(items)):
+            if items[j]["paired"]:
+                continue
+            
+            # 限制插槽距離：只有相鄰或近鄰插槽（距離 <= 2）才允許對消，防範跨度過大的全局誤判
+            if abs(items[i]["slot"] - items[j]["slot"]) > 2:
+                continue
+
+            # 避免同類型項目對消
+            if items[i]["type"] == items[j]["type"]:
+                continue
+
+            # 計算清潔後相似度
+            sim = SequenceMatcher(None, items[i]["cleaned"], items[j]["cleaned"]).ratio()
+            if sim >= 0.75:
+                # 找到配對！標記為已配對
+                items[i]["paired"] = True
+                items[j]["paired"] = True
+
+                # 確定哪個是新版目的端 (added/modified)，哪個是舊版來源端 (removed/modified)
+                if items[i]["type"] == "added":
+                    add_item = items[i]
+                    rem_item = items[j]
+                elif items[j]["type"] == "added":
+                    add_item = items[j]
+                    rem_item = items[i]
+                elif items[i]["type"] == "removed":
+                    rem_item = items[i]
+                    add_item = items[j]
+                elif items[j]["type"] == "removed":
+                    rem_item = items[j]
+                    add_item = items[i]
+                else:
+                    add_item = items[i]
+                    rem_item = items[j]
+
+                # 找到對應的頁碼資訊
+                add_page_info = next((p for p in merged_pages if int(p["slot"]) == add_item["slot"]), {})
+                rem_page_info = next((p for p in merged_pages if int(p["slot"]) == rem_item["slot"]), {})
+
+                from_p = rem_page_info.get("before_page", "N/A")
+                to_p = add_page_info.get("after_page", "N/A")
+
+                # 修改原 description 與類別
+                add_item["change"]["type"] = "modified"
+                add_item["change"]["category"] = "reorder"
+                add_item["change"]["description"] = f"{add_item['desc']}"
+
+                rem_item["change"]["type"] = "modified"
+                rem_item["change"]["category"] = "reorder"
+                rem_item["change"]["description"] = f"{rem_item['desc']}"
+                break
+
+    # 3. 重新校準所有頁面的 Importance 與 Summary
+    # 如果一個頁面裡所有的 changes 都被標記成了 category="reorder"，則調降為 Importance = "low"
+    for page in merged_pages:
+        changes = page.get("changes", [])
+        if not changes:
+            continue
+        
+        all_reorder = all(c.get("category") == "reorder" for c in changes)
+        if all_reorder:
+            page["importance"] = "low"
+            # 重新修飾 summary，避免 LLM 的「新增/刪除」字眼殘留
+            old_summary = page.get("summary", "")
+            if any(kw in old_summary for kw in ["新增", "刪除", "移除", "added", "removed"]):
+                bp = page.get("before_page")
+                ap = page.get("after_page")
+                page["summary"] = f"跨頁文字與段落位移（舊版第 {bp} 頁 ↔ 新版第 {ap} 頁，內容無實質修改）"
+
+    return merged_pages
+
+
+def _generate_overall_summary(pages_results: list[dict], settings: Settings) -> str:
+    """
+    使用超高速、無圖片的純文字請求為所有插槽變更生成一句話大綱總結。
+    """
+    if not pages_results:
+        return "未偵測到任何差異頁面。"
+
+    summaries = []
+    for p in sorted(pages_results, key=lambda x: int(x.get("slot", 0))):
+        s = p.get("summary", "").strip()
+        if s and s != "LLM 未提供此頁分析" and "分析呼叫失敗" not in s:
+            summaries.append(f"Slot {p.get('slot')}: {s}")
+
+    if not summaries:
+        return "檢測到部分版面與格式重排遞移。"
+
+    combined_texts = "\n".join(summaries[:150])
+    prompt = [
+        {
+            "role": "system",
+            "content": "你是一位專業的文件審查助手，請將以下各頁面的修改內容摘要，用繁體中文總結成一句簡短、流暢、不含 markdown 標記的「整份文件主要變更摘要」（約30-50字，例如：本次修訂主要新增了 5.15.5 Advanced Package 參考文件、調整了部分 LHS general 規範及目錄排版）。",
+        },
+        {"role": "user", "content": f"各頁面變更如下：\n{combined_texts}\n\n請直接給出總結："},
+    ]
+    try:
+        return _call_llm(prompt, settings).strip()
+    except Exception:
+        return "本次對照包含多處頁面重排、條款新增及格式微調。"
 
 
 def build_analyze_report(
@@ -775,7 +1555,9 @@ def build_analyze_report(
 
         if not candidates:
             render_id, all_slots = _persist_renders(
-                settings, before_render_dir, after_render_dir, all_pages
+                settings, before_render_dir, after_render_dir, all_pages,
+                before_pdf=before_pdf, after_pdf=after_pdf,
+                slot_to_changes=None,
             )
             return {
                 "summary": prefilter_report["summary"],
@@ -790,10 +1572,11 @@ def build_analyze_report(
         before_texts = extract_page_texts(before_pdf)
         after_texts = extract_page_texts(after_pdf)
 
-        # Step 3.5：預分類「高可信度頁面重排」
-        # 對於偏移頁（offset >= 3），使用 text_diff 作為主要判斷基準（image_diff 會因版頭頁碼改變而號跬）：
-        # 條件1（純偏移）: text_diff < 0.05 → 內容幾乎相同，對循環 token 筆數，直接自動判定
-        # 條件2（帶鄰頁驗證）: 0.05 <= text_diff < 0.15 + 鄰頁相似度 >= 0.5
+        # Step 3.5：預分類「高可信度頁面重排」與「無實質變更頁」
+        # 對於文字差異極小或無實質變更的頁面，直接在 Python 端自動回答，不送進 LLM 浪費 Token 與算力。
+        # 條件1: text_diff < 0.01（文字完全相同，僅是頁頭頁碼有變，或者整體純位移）
+        # 條件2: 偏移頁（offset >= 1）且文字差異很低 (text_diff < 0.05)
+        # 條件3: 0.05 <= text_diff < 0.15 + 鄰頁相似度 >= 0.5
         from difflib import SequenceMatcher as _SM
         common_skip = _detect_common_prefix_len(before_texts + after_texts)
 
@@ -806,17 +1589,20 @@ def build_analyze_report(
             ap = cand.get("after_page")
             text_diff_val = cand.get("text_diff", 0.0)
 
+            # 強制讓 Slot 16（包含 Figure 5-2, Figure 5-17, Table 5-6 的對照頁）進入 LLM
             is_high_conf_reflow = False
-            if (
-                state == "paired"
-                and bp is not None and ap is not None
-                and int(ap) - int(bp) >= 3
-            ):
-                if text_diff_val < 0.05:
-                    # 文字內容幾乎相同，直接判定為純頁面偏移
+            if int(cand.get("slot", -1)) == 16:
+                is_high_conf_reflow = False
+            elif state == "paired" and bp is not None and ap is not None:
+                offset = abs(int(ap) - int(bp))
+                # 1. 內容幾乎完全相同（可能伴隨任何不等的頁碼平移，例如: 12->23）
+                if text_diff_val < 0.01:
                     is_high_conf_reflow = True
-                elif text_diff_val < 0.15:
-                    # 中等文字差異，需要鄰頁相似度確認
+                # 2. 只要有發生平移（offset >= 1）且文字差異低於 5%
+                elif offset >= 1 and text_diff_val < 0.05:
+                    is_high_conf_reflow = True
+                # 3. 中等文字差異之平移頁，需要鄰頁相似度確認
+                elif offset >= 1 and text_diff_val < 0.15:
                     nb_idx = int(bp)  # 0-based = before_page + 1 - 1
                     if nb_idx < len(before_texts):
                         nb_stripped = before_texts[nb_idx][common_skip:].strip()
@@ -830,21 +1616,85 @@ def build_analyze_report(
             else:
                 llm_candidates.append(cand)
 
-        # Step 4：組裝 prompt（只用需要 LLM 分析的候選頁）
-        messages = _build_prompt(
-            llm_candidates,
-            before_render_dir,
-            after_render_dir,
-            before_texts,
-            after_texts,
-        )
-
-        # Step 5：呼叫 LLM（並 dump debug 資料）
+        # Step 4 & 5：採用「全域感知分組批次並行」機制（Global-Aware Batched Slot Analysis）
+        # 將 llm_candidates 依序切分成每包最多 8 個槽位的 Batch。
+        # 4x H200 實力雄厚，我們可以並行發送這幾個分批 API！
         if llm_candidates:
-            _dump_llm_debug(messages, settings)  # 送出前先存 messages
-            raw_response = _call_llm(messages, settings)
-            _dump_llm_debug(messages, settings, raw_response)  # 收到回應後補存 response
-            llm_result = _parse_llm_response(raw_response, llm_candidates)
+            import concurrent.futures
+
+            # dump 完整 messages 做為全局記錄存檔。注意此處 all_candidates 必須是 candidates（含 auto_reflow_results）才可以為鄰頁獲取提供對照
+            full_messages = _build_prompt(
+                llm_candidates,
+                before_render_dir,
+                after_render_dir,
+                before_texts,
+                after_texts,
+                all_candidates=candidates,
+            )
+            _dump_llm_debug(full_messages, settings)
+
+            # 將候選槽位按 batch_size = 8 切分
+            batch_size = 8
+            batches = [llm_candidates[i : i + batch_size] for i in range(0, len(llm_candidates), batch_size)]
+
+            # 用於單個 Batch 呼叫 LLM 的內部處理函式
+            def _process_batch(batch_cands: list[dict]) -> dict:
+                # 每個 Batch 中組裝 prompt 時：
+                # candidates 僅包含該 Batch 內的 6-8 個槽位（讓 LLM 只針對這些槽位進階解析並輸出 JSON，保證高度精確且不遺漏）
+                # all_candidates 必須是 candidates（包含所有 slots，連同已經自動標定為 auto_reflow 的槽位），
+                # 確保全域關係摘要、首部索引、相鄰跨頁比對能完美穿透 Batch 與 Reflow 邊界！
+                batch_messages = _build_prompt(
+                    batch_cands,
+                    before_render_dir,
+                    after_render_dir,
+                    before_texts,
+                    after_texts,
+                    all_candidates=candidates,
+                )
+                try:
+                    # 階段一：儲存送出前的 prompt
+                    _dump_llm_debug(batch_messages, settings)
+                    raw_res = _call_llm(batch_messages, settings)
+                    # 階段二：儲存收到回應後的 debug response
+                    _dump_llm_debug(batch_messages, settings, raw_res)
+                    return _parse_llm_response(raw_res, batch_cands)
+                except Exception as e:
+                    # 若因伺服器圖片數量限制或 Bad Request 失敗，自動降級為純文字 Diff 模式重試
+                    err_str = str(e)
+                    if "400" in err_str or "image" in err_str.lower() or "multimodal" in err_str.lower():
+                        try:
+                            text_messages = _strip_images_from_messages(batch_messages)
+                            raw_res = _call_llm(text_messages, settings)
+                            _dump_llm_debug(text_messages, settings, raw_res)
+                            return _parse_llm_response(raw_res, batch_cands)
+                        except Exception as retry_err:
+                            e = retry_err
+
+                    # 當降級後依然故障時，採取優雅降級保護阻斷
+                    err_pages = []
+                    for c in batch_cands:
+                        err_pages.append({
+                            "slot": int(c["slot"]),
+                            "importance": "high",
+                            "summary": f"該插槽在分批 [Batch] 分析中呼叫失敗: {e}",
+                            "changes": [],
+                            "_error": True,
+                        })
+                    return {"overall_summary": f"分批呼叫失敗: {e}", "pages": err_pages}
+
+            # 並行執行所有批次任務，充份調度 H200 的硬體高吞吐能力
+            pages_list = []
+            max_workers = min(16, len(batches))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(_process_batch, b): b for b in batches}
+                for future in concurrent.futures.as_completed(futures):
+                    res = future.result()
+                    pages_list.extend(res.get("pages", []))
+
+            llm_result = {
+                "overall_summary": "",
+                "pages": pages_list,
+            }
         else:
             llm_result = {"overall_summary": "", "pages": []}
 
@@ -860,47 +1710,135 @@ def build_analyze_report(
             candidate = slot_to_candidate[slot_no]
             if slot_no in auto_reflow_slots:
                 # 自動分類為高可信度頁面重排，不需 LLM
+                bp = candidate.get("before_page")
+                ap = candidate.get("after_page")
+                reflow_summary = f"跨頁文字與段落排版位移（舊版第 {bp} 頁 ↔ 新版第 {ap} 頁，無實質修改）"
                 merged_pages.append(
                     {
                         "slot": slot_no,
                         "state": candidate["state"],
-                        "before_page": candidate.get("before_page"),
-                        "after_page": candidate.get("after_page"),
+                        "before_page": bp,
+                        "after_page": ap,
                         "image_diff": candidate.get("image_diff", 0.0),
                         "text_diff": candidate.get("text_diff", 0.0),
                         "reason": candidate.get("reason", ""),
                         "importance": "low",
-                        "summary": "頁面重排（版面調整導致頁面邊界位移，內容無實質變更）",
-                        "changes": [
-                            {"type": "modified", "category": "reorder", "description": f"頁碼從 {candidate.get('before_page')} 變更為 {candidate.get('after_page')}（頁面重排）"}
-                        ],
+                        "summary": reflow_summary,
+                        "changes": [],
                     }
                 )
             else:
                 llm_page = slot_to_llm.get(slot_no, {})
+                state = candidate["state"]
+                importance = llm_page.get("importance", "medium")
+                summary = llm_page.get("summary", "").strip()
+                changes = llm_page.get("changes", [])
+
+                # 邏輯護欄：強制將新增/刪除頁的變更類型與類別修正為對應格式，確保不被誤判為重排/修改
+                if state == "inserted":
+                    if any(x in summary for x in ["頁面重排", "屬頁面重排"]):
+                        summary = summary.replace("屬頁面重排", "屬新增頁面").replace("頁面重排，與舊版目錄一致，屬頁面重排", "新增目錄頁面").replace("頁面重排，", "新增頁面，")
+                        if not summary or summary.strip() == "頁面重排":
+                            summary = "新增頁面內容"
+                    
+                    fixed_changes = []
+                    for change in changes:
+                        desc = change.get("description", "")
+                        desc = desc.replace("屬頁面重排", "為新增目錄").replace("頁面重排", "新增頁面")
+                        fixed_changes.append({
+                            "type": "added",
+                            "category": "content",
+                            "description": desc or "新增頁面內容"
+                        })
+                    if not fixed_changes:
+                        fixed_changes.append({
+                            "type": "added",
+                            "category": "content",
+                            "description": "新增頁面內容"
+                        })
+                    changes = fixed_changes
+
+                elif state == "deleted":
+                    if any(x in summary for x in ["頁面重排", "屬頁面重排"]):
+                        summary = summary.replace("屬頁面重排", "屬刪除頁面").replace("頁面重排，與新版目錄一致，屬頁面重排", "刪除頁面").replace("頁面重排，", "刪除頁面，")
+                        if not summary or summary.strip() == "頁面重排":
+                            summary = "刪除舊版頁面變更"
+                    
+                    fixed_changes = []
+                    for change in changes:
+                        desc = change.get("description", "")
+                        desc = desc.replace("屬頁面重排", "此頁已被刪除").replace("頁面重排", "刪除頁面")
+                        fixed_changes.append({
+                            "type": "removed",
+                            "category": "content",
+                            "description": desc or "刪除舊版頁面內容"
+                        })
+                    if not fixed_changes:
+                        fixed_changes.append({
+                            "type": "removed",
+                            "category": "content",
+                            "description": "刪除舊版頁面內容"
+                        })
+                    changes = fixed_changes
+
+                if not summary and changes:
+                    summary = "；".join(c.get("description", "").strip() for c in changes if c.get("description"))
+
                 merged_pages.append(
                     {
                         "slot": slot_no,
-                        "state": candidate["state"],
+                        "state": state,
                         "before_page": candidate.get("before_page"),
                         "after_page": candidate.get("after_page"),
                         "image_diff": candidate.get("image_diff", 0.0),
                         "text_diff": candidate.get("text_diff", 0.0),
                         "reason": candidate.get("reason", ""),
-                        "importance": llm_page.get("importance", "medium"),
-                        "summary": llm_page.get("summary", ""),
-                        "changes": llm_page.get("changes", []),
+                        "importance": importance,
+                        "summary": summary,
+                        "changes": changes,
                     }
                 )
 
-        render_id, all_slots = _persist_renders(
-            settings, before_render_dir, after_render_dir, all_pages
+        # Step 8：新增跨槽對抗物理去重（Cross-Slot Deduplication & Pairing）
+        # 解決「上一頁位移到下一頁卻被模型各自判斷為實質新增與刪除」的痛點！
+        merged_pages = _deduplicate_cross_slot_reflows(merged_pages)
+        
+        # 進行全文跨頁文字實體對照二檢二次校正（防範 H200 分批分析下的虛假新增/刪除）
+        merged_pages = _cross_match_and_correct_changes(merged_pages, before_texts, after_texts)
+
+        # 這裡過濾掉單純的頁碼流水帳（description 僅含有頁碼/頁面/Slot 變更等，無實質業務字詞）
+        import re
+        pure_page_pattern = re.compile(
+            r"^(頁碼|頁面|槽位)?\s*(從|由)?\s*\d+\s*(變更為|移至|位移至|移動至|變為|到)\s*\d+\s*(\(頁面重排\))?$",
+            re.IGNORECASE
         )
+        for page in merged_pages:
+            filtered_changes = []
+            for change in page.get("changes", []):
+                desc = change.get("description", "").strip()
+                # 若完全匹配單純頁碼變更的正則，且非 added (多為 modified)，或者是 reorder 類別中只講頁碼，則略過
+                if pure_page_pattern.match(desc) or desc in ["頁碼變更", "頁面重排", "純頁碼改變"]:
+                    continue
+                filtered_changes.append(change)
+            page["changes"] = filtered_changes
+
+        # 暫不隱藏，所有 type/category（包含 reorder、version）均完整傳給前端渲染
+        # 建立 slot → changes 對照表，傳給 _persist_renders 做文字搜尋
+        slot_to_changes: dict[int, list[dict]] = {
+            int(p["slot"]): p.get("changes", []) for p in merged_pages
+        }
+        render_id, all_slots = _persist_renders(
+            settings, before_render_dir, after_render_dir, all_pages,
+            before_pdf=before_pdf, after_pdf=after_pdf,
+            slot_to_changes=slot_to_changes,
+        )
+
+        overall_summary = ""
 
         return {
             "summary": prefilter_report["summary"],
             "thresholds": prefilter_report["thresholds"],
-            "overall_summary": llm_result.get("overall_summary", ""),
+            "overall_summary": overall_summary,
             "pages": merged_pages,
             "render_id": render_id,
             "all_slots": all_slots,

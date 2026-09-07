@@ -16,12 +16,12 @@ services:
     <<: *backend-common
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
     ports:
-      - "8080:8000"
+      - "8081:8000"
     volumes:
       - ./var:/var
       - ./frontend:/frontend
     environment:
       PDF_COMPARE_STORAGE_ROOT: /var/compare
       PDF_COMPARE_FRONTEND_DIR: /frontend
-      PDF_COMPARE_LLM_BASE_URL: ${PDF_COMPARE_LLM_BASE_URL:-http://192.168.39.143:8001}
-      PDF_COMPARE_LLM_MODEL: ${PDF_COMPARE_LLM_MODEL:-gemma-4:31B}
+      PDF_COMPARE_LLM_BASE_URL: ${PDF_COMPARE_LLM_BASE_URL:-http://192.168.39.143:8005}
+      PDF_COMPARE_LLM_MODEL: ${PDF_COMPARE_LLM_MODEL:-Qwen/Qwen3.8-27B}

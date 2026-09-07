@@ -148,7 +148,7 @@ flowchart TD
 | 用途 | 技術 |
 |------|------|
 | API 服務 | Python 3.11 · FastAPI · Uvicorn |
-| 背景任務佇列 | Celery · Redis |
+| 背景任務佇列 | FastAPI BackgroundTasks（無須 Redis / Celery） |
 | PDF 渲染 & 文字提取 | PyMuPDF（fitz） |
 | 影像對齊 & 差異計算 | OpenCV · NumPy |
 | 頁面配對演算法 | 自製動態規劃（仿 Needleman-Wunsch） |
@@ -160,6 +160,8 @@ flowchart TD
 ## 快速開始（Docker）
 
 ```powershell
+cd C:\path\to\pdf-compare
+
 # 首次啟動（建置映像）
 docker compose up --build
 
@@ -170,9 +172,9 @@ docker compose down
 docker compose up
 ```
 
-啟動後開啟瀏覽器：`http://127.0.0.1:8000/`
+啟動後開啟瀏覽器：`http://127.0.0.1:8081/`
 
-> 詳細啟動方式（含本機開發模式）請參考 [START.md](START.md)
+啟動方式與部署說明已整合在本 README 的「使用與部署」章節。
 
 ---
 
@@ -193,7 +195,7 @@ docker compose up
 | `GET` | `/docs` | Swagger 互動文件 |
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/compare \
+curl -X POST http://127.0.0.1:8081/api/compare \
   -F "before=@before.pdf" \
   -F "after=@after.pdf" \
   -F "mode=smart"
@@ -206,3 +208,85 @@ curl -X POST http://127.0.0.1:8000/api/compare \
 - 單一 PDF 上限：50 MB
 - 單一 PDF 頁數上限：200 頁
 - 任務產物保留：24 小時後自動清除
+
+## 使用與部署
+
+### 本機開發
+
+以下指令在 `backend/` 目錄內執行。首次建立環境：
+
+```powershell
+cd backend
+python3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+日常啟動：
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+uvicorn app.main:app --reload --port 8000
+```
+
+### Docker 操作
+
+```powershell
+# 首次啟動或程式有變更時
+docker compose up -d --build
+
+# 查看狀態與即時日誌
+docker compose ps
+docker compose logs -f
+
+# 停止容器但保留資料
+docker compose stop
+
+# 停止並移除容器
+docker compose down
+```
+
+Docker Compose 只會啟動 1 個 API 容器，排程清理已內建，不需要 Redis、Celery 或其他服務。
+
+更換 LLM 伺服器可在 PowerShell 設定，或寫入 `backend/.env`：
+
+```powershell
+$env:PDF_COMPARE_LLM_BASE_URL = "http://your-llm-host:8001"
+docker compose up -d --build
+```
+
+```text
+PDF_COMPARE_LLM_BASE_URL=http://your-llm-host:8001
+```
+
+### 伺服器更新
+
+以下指令在伺服器上的專案根目錄執行：
+
+```bash
+cd /home/user/pro/pdf-compare
+git pull
+docker compose up -d --build
+```
+
+若要指定分支並以遠端版本覆蓋本機修改：
+
+```bash
+git fetch --all
+git reset --hard origin/feat/text-diff-highlight
+docker compose up -d --build
+```
+
+### 資料與自動清理
+
+容器內的 `/var/compare` 綁定到主機專案下的 `var/compare`，應用程式會自動建立需要的資料夾。
+
+- `jobs`：每小時檢查，任務預設保留 24 小時後刪除
+- `llm_debug`：每 24 小時檢查，刪除超過 7 天的資料
+- 清理只在 API 服務運行時執行，第一次檢查約在啟動 1 小時後
+- `scan_records.jsonl` 目前不會自動清理
+
+### LLM 前處理
+
+前端上傳兩份 PDF 後，可按「LLM 前處理」先挑出值得送進 LLM 的候選頁。流程會先做 smart 頁面配對，再計算 `image_diff` 與 `text_diff`；新增頁與刪除頁直接列入候選，候選不足時以高分頁補齊。這只做頁級打分，不產生完整遮罩與差異框，因此比完整 smart 比對更快。

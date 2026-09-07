@@ -45,41 +45,16 @@ def run_compare_job(job_id: str, mode: str) -> None:
         meta["stats"]["pages_before"] = pages_before
         meta["stats"]["pages_after"] = pages_after
 
-        if mode == "smart":
-            page_map = plan_smart_mapping(
-                settings=settings,
-                before_render_dir=job_root / "render" / "before",
-                after_render_dir=job_root / "render" / "after",
-                pages_before=pages_before,
-                pages_after=pages_after,
-                before_texts=before_texts,
-                after_texts=after_texts,
-            )
-        else:
-            page_map = []
-            paired = min(pages_before, pages_after)
-            for i in range(1, paired + 1):
-                page_map.append(
-                    {"slot": i, "before_page": i, "after_page": i, "state": "paired"}
-                )
-            for i in range(paired + 1, pages_before + 1):
-                page_map.append(
-                    {
-                        "slot": len(page_map) + 1,
-                        "before_page": i,
-                        "after_page": None,
-                        "state": "deleted",
-                    }
-                )
-            for i in range(paired + 1, pages_after + 1):
-                page_map.append(
-                    {
-                        "slot": len(page_map) + 1,
-                        "before_page": None,
-                        "after_page": i,
-                        "state": "inserted",
-                    }
-                )
+        # 統一使用智慧對排 (Smart Mapping)，不再保留容易導致錯位故障的順序對照 (FAST) 模式
+        page_map = plan_smart_mapping(
+            settings=settings,
+            before_render_dir=job_root / "render" / "before",
+            after_render_dir=job_root / "render" / "after",
+            pages_before=pages_before,
+            pages_after=pages_after,
+            before_texts=before_texts,
+            after_texts=after_texts,
+        )
 
         write_json(job_root / "page_map.json", page_map)
 

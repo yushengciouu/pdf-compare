@@ -6,12 +6,17 @@
     <title>PDF Compare Viewer</title>
     <style>
       :root {
-        --bg: #f2f5f8;
-        --card: #ffffff;
-        --text: #1f2937;
-        --muted: #637083;
-        --line: #d6dde6;
-        --accent: #0868c6;
+        --bg: #f1eee8;
+        --card: #fffdfa;
+        --text: #172433;
+        --muted: #6b7785;
+        --line: #ddd9d1;
+        --accent: #1769a8;
+        --accent-dark: #103d62;
+        --accent-soft: #e8f1f7;
+        --ink-soft: #f8f6f1;
+        --teal: #147c79;
+        --coral: #d86b53;
         --danger: #b42318;
         --mask: rgba(255, 64, 64, 0.28);
       }
@@ -22,23 +27,61 @@
         margin: 0;
         font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif;
         color: var(--text);
-        background: radial-gradient(circle at 0 0, #dbeeff, var(--bg) 45%);
+        background-color: var(--bg);
+        background-image:
+          linear-gradient(rgba(23, 36, 51, 0.025) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(23, 36, 51, 0.025) 1px, transparent 1px);
+        background-size: 32px 32px;
+        min-height: 100vh;
       }
       main {
-        max-width: 96vw;
-        margin: 20px auto;
-        padding: 0 16px 24px;
+        max-width: 1800px;
+        margin: 0 auto;
+        padding: 28px 28px 56px;
       }
       .card {
         background: var(--card);
-        border-radius: 14px;
-        box-shadow: 0 10px 30px rgba(9, 30, 66, 0.08);
-        border: 1px solid #e8edf3;
-        padding: 16px;
-        margin-bottom: 12px;
+        border-radius: 6px;
+        box-shadow: 0 16px 36px rgba(56, 48, 39, 0.09);
+        border: 1px solid #e4dfd7;
+        padding: 28px;
+        margin-bottom: 18px;
+        backdrop-filter: blur(12px);
+      }
+      .hero-card {
+        position: relative;
+        overflow: hidden;
+      }
+      .hero-card::before {
+        content: "";
+        position: absolute;
+        inset: 0 0 auto;
+        height: 5px;
+        background: linear-gradient(90deg, var(--accent-dark), var(--accent) 52%, var(--coral));
+      }
+      .eyebrow {
+        margin: 0 0 10px;
+        color: var(--coral);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .hero-copy {
+        max-width: 680px;
+        margin-bottom: 20px;
+      }
+      .hero-copy p {
+        margin-top: 8px;
+        line-height: 1.7;
       }
       h1 {
-        margin: 0 0 4px;
+        margin: 0;
+        color: var(--accent-dark);
+        font-family: Georgia, "Noto Serif TC", serif;
+        font-size: clamp(30px, 3.2vw, 48px);
+        line-height: 1.12;
+        letter-spacing: 0;
       }
       p {
         margin: 0;
@@ -46,43 +89,27 @@
       }
       .top-grid {
         display: grid;
-        grid-template-columns: 1fr 1fr auto;
-        gap: 10px;
-        margin-top: 14px;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 220px;
+        gap: 14px;
+        margin-top: 24px;
       }
-      .view-controls {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-top: 10px;
-        flex-wrap: wrap;
+      .top-grid > div:not(.action-col) {
+        position: relative;
+        padding: 18px;
+        border: 1px solid #ded9d0;
+        border-radius: 5px;
+        background: #fffefa;
+        box-shadow: inset 0 3px 0 #e9e4dc;
       }
-      .view-controls input[type="range"] {
-        width: 220px;
-        min-height: 24px;
-      }
-      .view-controls button {
-        width: auto;
-        min-width: 150px;
-      }
-      .view-controls .mini-range {
-        width: 120px;
-      }
-      .view-controls .toggle {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 13px;
-      }
-      .view-controls .toggle input {
-        width: 16px;
-        min-height: 16px;
-        margin: 0;
-      }
-      .view-controls .small-select {
-        width: 130px;
-        min-height: 34px;
-        padding: 4px 8px;
+      .top-grid > div:not(.action-col)::after {
+        content: "PDF";
+        position: absolute;
+        top: 18px;
+        right: 18px;
+        color: #a69d91;
+        font-family: Consolas, Menlo, monospace;
+        font-size: 10px;
+        letter-spacing: 0.12em;
       }
       .action-col {
         display: grid;
@@ -91,6 +118,8 @@
       label {
         display: block;
         font-size: 14px;
+        font-weight: 800;
+        color: var(--accent-dark);
         margin-bottom: 6px;
       }
       input,
@@ -98,18 +127,57 @@
       button {
         width: 100%;
         min-height: 40px;
-        border-radius: 10px;
+        border-radius: 4px;
         border: 1px solid var(--line);
         padding: 8px 10px;
         font-size: 14px;
       }
+      input[type="file"] {
+        padding: 5px;
+        background: #fbfaf7;
+        border-style: dashed;
+        color: #6b7785;
+      }
+      input[type="file"]::file-selector-button {
+        margin-right: 8px;
+        border: 0;
+        border-radius: 3px;
+        padding: 8px 12px;
+        background: var(--accent-soft);
+        color: var(--accent-dark);
+        font-weight: 800;
+        cursor: pointer;
+      }
+      input[type="file"]::file-selector-button:hover {
+        background: #dcebf4;
+      }
+      input:focus-visible,
+      select:focus-visible,
+      button:focus-visible {
+        outline: 3px solid rgba(216, 107, 83, 0.3);
+        outline-offset: 2px;
+      }
+      .action-col {
+        align-content: end;
+      }
+      .action-col label {
+        visibility: hidden;
+      }
       button {
-        background: var(--accent);
+        background: var(--accent-dark);
         border: 0;
         color: #fff;
         font-weight: 700;
         cursor: pointer;
         min-width: 120px;
+        box-shadow: 0 8px 16px rgba(16, 61, 98, 0.2);
+        transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
+      }
+      button:hover:not(:disabled) {
+        background: var(--accent);
+        filter: none;
+        transform: translateY(-1px);
+        box-shadow: 0 10px 20px rgba(16, 61, 98, 0.26);
       }
       button:disabled {
         opacity: 0.6;
@@ -119,27 +187,29 @@
         margin-top: 12px;
         font-size: 14px;
       }
-      .progress {
-        margin-top: 10px;
+      #status {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 0;
+        border-left: 0;
+        background: transparent;
+        color: #5c554c;
       }
-      .progress-track {
-        width: 100%;
-        height: 10px;
-        border-radius: 999px;
-        background: #e8eef6;
-        overflow: hidden;
-        border: 1px solid #d3dce9;
+      #status::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--coral);
+        box-shadow: 0 0 0 3px rgba(216, 107, 83, 0.12);
       }
-      .progress-fill {
-        width: 0%;
-        height: 100%;
-        background: linear-gradient(90deg, #0a64be, #2e8be9);
-        transition: width 0.25s ease;
-      }
-      .progress-text {
-        margin-top: 6px;
-        color: var(--muted);
+      .file-meta {
+        min-height: 20px;
+        margin-top: 5px;
+        color: #7a746b;
         font-size: 12px;
+        overflow-wrap: anywhere;
       }
       .err {
         color: var(--danger);
@@ -148,101 +218,6 @@
         font-family: Consolas, Menlo, monospace;
       }
 
-      .compare-layout {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 12px;
-        align-items: start;
-      }
-      .pane {
-        background: #f8fafc;
-        border: 1px solid #dce3ec;
-        border-radius: 12px;
-        height: calc(100vh - 220px);
-        overflow: auto;
-        padding: 10px;
-      }
-      .pane h3 {
-        margin: 0 0 8px;
-        font-size: 15px;
-      }
-      .page-card {
-        border: 1px solid #d5ddeb;
-        background: #fff;
-        border-radius: 10px;
-        margin-bottom: 10px;
-        padding: 8px;
-        transition: box-shadow 0.2s ease, border-color 0.2s ease;
-      }
-      .page-card.focused {
-        border-color: #1f6fcd;
-        box-shadow: 0 0 0 3px rgba(31, 111, 205, 0.2);
-      }
-      .page-head {
-        display: flex;
-        justify-content: space-between;
-        font-size: 12px;
-        margin-bottom: 6px;
-        color: #3f4d63;
-      }
-      .state-badge {
-        display: inline-block;
-        padding: 2px 8px;
-        border-radius: 999px;
-        font-size: 11px;
-        font-weight: 700;
-        border: 1px solid transparent;
-      }
-      .state-badge.paired {
-        background: #eef5ff;
-        color: #24548a;
-        border-color: #c8dbf5;
-      }
-      .state-badge.inserted {
-        background: #eaf8f4;
-        color: #0f6a50;
-        border-color: #bfe9dd;
-      }
-      .state-badge.deleted {
-        background: #fdeeee;
-        color: #a22727;
-        border-color: #f7caca;
-      }
-      .img-wrap {
-        position: relative;
-        border: 1px solid #e6ebf2;
-        background: #fafafa;
-        border-radius: 8px;
-        min-height: 220px;
-      }
-      .img-wrap img {
-        width: 100%;
-        display: block;
-        border-radius: 8px;
-      }
-      .img-wrap .mask {
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-        object-fit: contain;
-        pointer-events: none;
-        mix-blend-mode: multiply;
-        opacity: 0.56;
-      }
-      .img-wrap .state-mask {
-        position: absolute;
-        inset: 0;
-        pointer-events: none;
-        border-radius: 8px;
-        z-index: 4;
-      }
-      .img-wrap .state-mask.inserted {
-        background: rgba(44, 173, 143, 0.32);
-      }
-      .img-wrap .state-mask.deleted {
-        background: rgba(215, 73, 73, 0.34);
-      }
       .placeholder {
         min-height: 220px;
         display: grid;
@@ -262,31 +237,77 @@
         align-items: center;
         gap: 10px;
         font-size: 14px;
-        color: #5a2d91;
+        color: #176b6b;
+        padding: 10px 12px;
+        border: 1px solid #b9e1da;
+        border-radius: 10px;
+        background: linear-gradient(100deg, #effbf8, #fffdfa, #effbf8);
+        background-size: 200% 100%;
+        animation: analyzeGlow 2.4s ease-in-out infinite;
       }
       .spinner {
+        position: relative;
         width: 18px;
         height: 18px;
-        border: 3px solid #d8c8f0;
-        border-top-color: #5a2d91;
+        border: 3px solid #bfe4de;
+        border-top-color: #087f83;
         border-radius: 50%;
         animation: spin 0.8s linear infinite;
         flex-shrink: 0;
       }
+      .spinner::after {
+        content: "";
+        position: absolute;
+        inset: 3px;
+        border: 1px dotted #52b8ad;
+        border-radius: 50%;
+        animation: spinReverse 1.2s linear infinite;
+      }
+      .analyze-dots {
+        display: inline-flex;
+        gap: 3px;
+        margin-left: -4px;
+      }
+      .analyze-dots i {
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: #087f83;
+        animation: dotBounce 1.1s ease-in-out infinite;
+      }
+      .analyze-dots i:nth-child(2) { animation-delay: 0.15s; }
+      .analyze-dots i:nth-child(3) { animation-delay: 0.3s; }
       @keyframes spin {
         to { transform: rotate(360deg); }
       }
+      @keyframes spinReverse {
+        to { transform: rotate(-360deg); }
+      }
+      @keyframes dotBounce {
+        0%, 60%, 100% { transform: translateY(0); opacity: 0.45; }
+        30% { transform: translateY(-4px); opacity: 1; }
+      }
+      @keyframes analyzeGlow {
+        0%, 100% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+      }
       /* LLM 分析結果 */
       .btn-analyze {
-        background: #5a2d91;
+        min-height: 50px;
+        background: var(--teal);
+        box-shadow: 0 8px 16px rgba(20, 124, 121, 0.2);
+      }
+      .btn-analyze:hover:not(:disabled) {
+        background: #0e6c69;
+        box-shadow: 0 10px 20px rgba(20, 124, 121, 0.28);
       }
       .analyze-overall {
-        background: #f3f0fa;
-        border: 1px solid #ccc0e8;
+        background: #edf8f6;
+        border: 1px solid #b9e1da;
         border-radius: 10px;
         padding: 10px 14px;
         font-size: 14px;
-        color: #2e1a55;
+        color: #174d4a;
         margin-bottom: 10px;
         line-height: 1.6;
       }
@@ -296,10 +317,10 @@
         margin-top: 6px;
       }
       .analyze-item {
-        border: 1px solid #d5ccea;
+        border: 1px solid #c7dedb;
         border-radius: 10px;
         padding: 10px 12px;
-        background: #fdfcff;
+        background: #fbfefd;
         font-size: 13px;
       }
       .analyze-item-head {
@@ -308,8 +329,23 @@
         gap: 8px;
         margin-bottom: 6px;
         font-weight: 600;
-        color: #2c1f4a;
+        color: #194f50;
       }
+      .jump-preview-btn {
+        align-self: center;
+        flex-shrink: 0;
+        padding: 2px 10px;
+        font-size: 11px;
+        font-weight: 600;
+        background: #3b82f6;
+        color: #fff;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        white-space: nowrap;
+        width: auto;
+      }
+      .jump-preview-btn:hover { background: #2563eb; }
       .importance-badge {
         display: inline-block;
         padding: 2px 9px;
@@ -368,39 +404,59 @@
       }
       .analyze-changes li.filtered-hidden { display: none; }
       .analyze-item.all-changes-hidden { display: none; }
+      .analyze-item.no-changes { display: none; }
 
       /* LLM 分析後的 PDF 瀏覽器 */
       .analyze-browser {
         margin-top: 16px;
-        border-top: 1px solid #dce3ec;
+        border-top: 1px solid #d7d2ca;
         padding-top: 14px;
       }
       .analyze-browser h3 {
         margin: 0 0 10px;
         font-size: 15px;
-        color: #2c1f4a;
+        color: var(--accent-dark);
       }
       .analyze-browser-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 10px;
+        width: calc(100% + 20px);
+        margin-left: -10px;
       }
       .analyze-browser-pane {
-        background: #f8fafc;
-        border: 1px solid #dce3ec;
-        border-radius: 10px;
-        height: 600px;
+        position: relative;
+        background: #f8f7f3;
+        border: 1px solid #d7d2ca;
+        border-radius: 5px;
+        height: clamp(600px, 72vh, 760px);
         overflow-y: auto;
         padding: 8px;
       }
+      .analyze-browser-pane::-webkit-scrollbar {
+        width: 8px;
+      }
+      .analyze-browser-pane::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .analyze-browser-pane::-webkit-scrollbar-thumb {
+        background: #b9c5d2;
+        border-radius: 999px;
+      }
+      #analyzeBrowserBefore {
+        scrollbar-width: none;
+      }
+      #analyzeBrowserBefore::-webkit-scrollbar {
+        display: none;
+      }
       .analyze-browser-pane h4 {
-        margin: 0 0 8px;
+        margin: -8px -8px 8px;
         font-size: 13px;
-        color: #3f4d63;
+        color: var(--accent-dark);
         position: sticky;
-        top: 0;
-        background: #f8fafc;
-        padding: 4px 0 6px;
+        top: -8px;
+        background: #f8f7f3;
+        padding: 8px 8px 6px;
         border-bottom: 1px solid #e3e8f0;
         z-index: 1;
       }
@@ -418,41 +474,117 @@
         color: #3f4d63;
         margin-bottom: 4px;
       }
+      /* SVG 差異標示層 */
+      .diff-img-wrap {
+        position: relative;
+        display: block;
+      }
+      .diff-img-wrap img {
+        width: 100%;
+        display: block;
+        border-radius: 6px;
+        aspect-ratio: 3/4;
+        object-fit: contain;
+        background: #eef0f4;
+      }
+      .diff-svg-overlay {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        overflow: visible;
+      }
+      .diff-svg-overlay rect {
+        pointer-events: all;
+        cursor: default;
+      }
 
-      @media (max-width: 1200px) {
-        .compare-layout {
-          grid-template-columns: 1fr 1fr;
-        }
-      }
-      @media (max-width: 980px) {
-        .compare-layout {
-          grid-template-columns: 1fr;
-        }
-        .pane {
-          height: 55vh;
-        }
-      }
       @media (max-width: 900px) {
         .top-grid {
           grid-template-columns: 1fr;
         }
       }
+      @media (max-width: 700px) {
+        main {
+          padding: 16px 12px 32px;
+        }
+        .card {
+          padding: 18px;
+        }
+        .analyze-browser-grid {
+          grid-template-columns: 1fr;
+          width: 100%;
+          margin-left: 0;
+        }
+        .analyze-browser-pane {
+          height: 480px;
+        }
+        .analyze-item-head {
+          align-items: flex-start;
+          flex-wrap: wrap;
+        }
+        .analyze-item-head .mono {
+          width: 100%;
+          margin-left: 0 !important;
+        }
+      }
+
+      /* 「跳至最上方」懸浮按鈕樣式 */
+      .scroll-to-top-btn {
+        position: fixed;
+        right: 24px;
+        bottom: 24px;
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        background: var(--accent); /* 使用原本定義的藍色主題色 */
+        color: #ffffff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        cursor: pointer;
+        z-index: 1000;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.3s ease, visibility 0.3s ease, transform 0.2s ease;
+        border: none;
+        outline: none;
+      }
+
+      /* 當有 show class 時顯示 */
+      .scroll-to-top-btn.show {
+        opacity: 1;
+        visibility: visible;
+      }
+
+      /* 游標懸停時的效果 */
+      .scroll-to-top-btn:hover {
+        transform: translateY(-4px);
+        background: #06509b; /* 稍微深一點的藍色色調 */
+      }
     </style>
   </head>
   <body>
     <main>
-      <section class="card">
+      <section class="card hero-card">
+        <div class="hero-copy">
+          <div class="eyebrow">Document review workspace</div>
         <h1>PDF Compare Viewer</h1>
-        <!-- <p> 差異清單（目前為影像層比對版）</p> -->
+          <p>快速看見兩個 PDF 版本之間的頁面、文字與內容差異。</p>
+        </div>
 
         <div class="top-grid">
           <div>
             <label for="before">舊版 PDF</label>
             <input id="before" type="file" accept="application/pdf" />
+            <div id="beforeMeta" class="file-meta">尚未選擇檔案</div>
           </div>
           <div>
             <label for="after">新版 PDF</label>
             <input id="after" type="file" accept="application/pdf" />
+            <div id="afterMeta" class="file-meta">尚未選擇檔案</div>
           </div>
           <div class="action-col">
             <label>&nbsp;</label>
@@ -460,28 +592,9 @@
           </div>
         </div>
 
-        <div class="status" id="status">尚未開始</div>
-        <div class="progress" style="display:none">
-          <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
-          <div id="progressText" class="progress-text">0%</div>
-        </div>
-        <div class="view-controls" style="display:none">
-          <label for="maskOpacity" class="mono">遮罩</label>
-          <input id="maskOpacity" class="mini-range" type="range" min="25" max="85" step="5" value="56" />
-          <span id="maskOpacityText" class="mono">56%</span>
-          <label for="markMode" class="mono">標記方式</label>
-          <select id="markMode" class="small-select">
-            <option value="all" selected>全部差異</option>
-            <option value="removed">只看左有右無</option>
-            <option value="added">只看右有左無</option>
-          </select>
-
-        </div>
-        <div class="status">任務 ID：<span id="job" class="mono">-</span></div>
+        <div class="status" id="status" role="status" aria-live="polite" style="display:none">尚未開始</div>
         <div id="analyzeSection" style="margin-top: 10px; display: none;">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
-            <button id="hideReorderBtn" type="button" style="background:#475569;min-width:0;width:auto;padding:6px 14px;font-size:13px;" onclick="toggleHideReorder()">隱藏頁面重排</button>
-            <span id="hideReorderHint" style="font-size:12px;color:#637083;"></span>
             <button id="hideVersionBtn" type="button" style="background:#475569;min-width:0;width:auto;padding:6px 14px;font-size:13px;" onclick="toggleHideVersion()">隱藏版本號變更</button>
             <span id="hideVersionHint" style="font-size:12px;color:#637083;"></span>
           </div>
@@ -489,6 +602,7 @@
             <div id="analyzeSpinnerRow" style="display:none" class="analyze-running">
               <div class="spinner"></div>
               <span id="analyzeTimerText">LLM 分析中，請稍候...</span>
+              <span class="analyze-dots" aria-hidden="true"><i></i><i></i><i></i></span>
             </div>
             <span id="analyzeStatusText"></span>
           </div>
@@ -510,27 +624,23 @@
         </div>
       </section>
 
-      <section class="compare-layout" style="display:none">
-        <section class="pane" id="beforePane">
-          <h3>Before</h3>
-          <div id="beforePages" class="pages"></div>
-        </section>
-
-        <section class="pane" id="afterPane">
-          <h3>After + Diff Mask（紅=左有右無，青=右有左無）</h3>
-          <div id="afterPages" class="pages"></div>
-        </section>
-
-      </section>
+      <!-- 跳至最上方按鈕 -->
+      <button id="scrollToTopBtn" class="scroll-to-top-btn" title="跳至最上方">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="18 15 12 9 6 15"></polyline>
+        </svg>
+      </button>
     </main>
 
     <script>
       const beforeInput = document.getElementById("before");
       const afterInput = document.getElementById("after");
+      const beforeMeta = document.getElementById("beforeMeta");
+      const afterMeta = document.getElementById("afterMeta");
       const statusEl = document.getElementById("status");
       const analyzeBtn = document.getElementById("analyzeBtn");
+      const MAX_FILE_SIZE = 50 * 1024 * 1024;
       const analyzeSectionEl = document.getElementById("analyzeSection");
-      const analyzeStatusEl = document.getElementById("analyzeStatus");
       const analyzeSpinnerRowEl = document.getElementById("analyzeSpinnerRow");
       const analyzeTimerTextEl = document.getElementById("analyzeTimerText");
       const analyzeStatusTextEl = document.getElementById("analyzeStatusText");
@@ -543,11 +653,38 @@
       const analyzeBrowserAfterPane = document.getElementById("analyzeBrowserAfter");
 
       let analyzeTimerInterval = null;
+      let analyzeStartedAt = null;
       let syncingScroll = false;
 
       function setStatus(text, isError = false) {
         statusEl.textContent = text;
         statusEl.classList.toggle("err", isError);
+        statusEl.style.display = "inline-flex";
+      }
+
+      function formatFileSize(bytes) {
+        if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+      }
+
+      function validateFile(file) {
+        if (!file) return "尚未選擇檔案";
+        if (!file.name.toLowerCase().endsWith(".pdf")) return "請選擇 PDF 檔案";
+        if (file.size > MAX_FILE_SIZE) return "檔案超過 50 MB 上限";
+        return `${file.name} · ${formatFileSize(file.size)}`;
+      }
+
+      function updateFileState(input, meta) {
+        const file = input.files?.[0];
+        const message = validateFile(file);
+        const valid = Boolean(file) && message.includes(" · ");
+        const beforeValid = validateFile(beforeInput.files?.[0]).includes(" · ");
+        const afterValid = validateFile(afterInput.files?.[0]).includes(" · ");
+        meta.textContent = message;
+        meta.classList.toggle("err", Boolean(file) && !valid);
+        input.setCustomValidity(valid ? "" : message);
+        analyzeBtn.disabled = !beforeValid || !afterValid;
+        if (beforeValid && afterValid) statusEl.style.display = "none";
       }
 
       let syncAnalyzeHeightTimer = null;
@@ -577,6 +714,73 @@
 
         const stateLabels = { paired: "配對頁", inserted: "新增頁", deleted: "刪除頁" };
 
+        // 建立帶 SVG 差異標示的圖片包裝容器
+        // boxes: [{type, x, y, w, h, text_before, text_after}]
+        // 顏色：removed=紅, added=綠, replaced=黃
+        function buildDiffImgWrap(imgSrc, imgAlt, boxes) {
+          const wrap = document.createElement("div");
+          wrap.className = "diff-img-wrap";
+
+          const img = document.createElement("img");
+          img.src = imgSrc;
+          img.alt = imgAlt;
+          img.decoding = "async";
+
+          // SVG 疊加層：等圖片載入後才能知道 naturalWidth/naturalHeight 設定 viewBox
+          const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+          svg.setAttribute("class", "diff-svg-overlay");
+
+          const BOX_COLORS = {
+            removed:  { fill: "rgba(220,38,38,0.15)",  stroke: "#dc2626" },
+            added:    { fill: "rgba(22,163,74,0.15)",   stroke: "#16a34a" },
+            replaced: { fill: "rgba(202,138,4,0.15)",   stroke: "#ca8a04" },
+          };
+
+          function drawBoxes() {
+            svg.innerHTML = "";
+            if (!boxes || !boxes.length) return;
+            const nw = img.naturalWidth;
+            const nh = img.naturalHeight;
+            if (!nw || !nh) return;
+            svg.setAttribute("viewBox", `0 0 ${nw} ${nh}`);
+            for (const box of boxes) {
+              const color = BOX_COLORS[box.type] || BOX_COLORS.replaced;
+              const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+              rect.setAttribute("x", box.x);
+              rect.setAttribute("y", box.y);
+              rect.setAttribute("width", box.w);
+              rect.setAttribute("height", box.h);
+              rect.setAttribute("fill", color.fill);
+              rect.setAttribute("stroke", color.stroke);
+              rect.setAttribute("stroke-width", "2");
+              rect.setAttribute("rx", "2");
+              // Tooltip
+              if (box.text_before || box.text_after) {
+                const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+                if (box.type === "replaced") {
+                  title.textContent = `${box.text_before} → ${box.text_after}`;
+                } else if (box.type === "removed") {
+                  title.textContent = `已刪除：${box.text_before}`;
+                } else {
+                  title.textContent = `新增：${box.text_after}`;
+                }
+                rect.appendChild(title);
+              }
+              svg.appendChild(rect);
+            }
+          }
+
+          img.addEventListener("load", () => {
+            drawBoxes();
+            scheduleAnalyzeSyncHeights();
+          }, { once: true });
+          img.addEventListener("error", scheduleAnalyzeSyncHeights, { once: true });
+
+          wrap.appendChild(img);
+          wrap.appendChild(svg);
+          return wrap;
+        }
+
         for (const slot of allSlots) {
           const stateText = stateLabels[slot.state] || slot.state;
 
@@ -589,15 +793,12 @@
           beforeHead.innerHTML = `<span>Slot ${slot.slot}</span><span>${stateText}${slot.before_page != null ? " · p." + slot.before_page : ""}</span>`;
           beforeCard.appendChild(beforeHead);
           if (slot.before_image) {
-            const img = document.createElement("img");
-            img.src = slot.before_image;
-            img.alt = `before slot ${slot.slot}`;
-            img.loading = "lazy";
-            img.decoding = "async";
-            img.style.cssText = "width:100%;border-radius:6px;display:block;";
-            img.addEventListener("load", scheduleAnalyzeSyncHeights, { once: true });
-            img.addEventListener("error", scheduleAnalyzeSyncHeights, { once: true });
-            beforeCard.appendChild(img);
+            const wrap = buildDiffImgWrap(
+              slot.before_image,
+              `before slot ${slot.slot}`,
+              slot.before_text_boxes || []
+            );
+            beforeCard.appendChild(wrap);
           } else {
             const ph = document.createElement("div");
             ph.className = "placeholder";
@@ -615,15 +816,12 @@
           afterHead.innerHTML = `<span>Slot ${slot.slot}</span><span>${stateText}${slot.after_page != null ? " · p." + slot.after_page : ""}</span>`;
           afterCard.appendChild(afterHead);
           if (slot.after_image) {
-            const img = document.createElement("img");
-            img.src = slot.after_image;
-            img.alt = `after slot ${slot.slot}`;
-            img.loading = "lazy";
-            img.decoding = "async";
-            img.style.cssText = "width:100%;border-radius:6px;display:block;";
-            img.addEventListener("load", scheduleAnalyzeSyncHeights, { once: true });
-            img.addEventListener("error", scheduleAnalyzeSyncHeights, { once: true });
-            afterCard.appendChild(img);
+            const wrap = buildDiffImgWrap(
+              slot.after_image,
+              `after slot ${slot.slot}`,
+              slot.after_text_boxes || []
+            );
+            afterCard.appendChild(wrap);
           } else {
             const ph = document.createElement("div");
             ph.className = "placeholder";
@@ -639,12 +837,12 @@
       }
 
       function startAnalyzeTimer() {
-        const startTime = Date.now();
+        analyzeStartedAt = Date.now();
         analyzeSpinnerRowEl.style.display = "flex";
         analyzeStatusTextEl.textContent = "";
         analyzeTimerTextEl.textContent = "LLM 分析中，請稍候... 0 秒";
         analyzeTimerInterval = setInterval(() => {
-          const elapsed = Math.floor((Date.now() - startTime) / 1000);
+          const elapsed = Math.floor((Date.now() - analyzeStartedAt) / 1000);
           const m = Math.floor(elapsed / 60);
           const s = elapsed % 60;
           const timeStr = m > 0 ? `${m} 分 ${s} 秒` : `${s} 秒`;
@@ -658,15 +856,23 @@
           analyzeTimerInterval = null;
         }
         analyzeSpinnerRowEl.style.display = "none";
-        analyzeStatusTextEl.textContent = resultText;
+        const elapsedMs = analyzeStartedAt ? Date.now() - analyzeStartedAt : 0;
+        const elapsedSeconds = Math.floor(elapsedMs / 1000);
+        const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+        const remainingSeconds = elapsedSeconds % 60;
+        const elapsedText = elapsedMinutes > 0
+          ? `${elapsedMinutes} 分 ${remainingSeconds} 秒`
+          : `${remainingSeconds} 秒`;
+        analyzeStatusTextEl.textContent = `${resultText}（耗時：${elapsedText}）`;
+        analyzeStartedAt = null;
         analyzeStatusTextEl.className = isError ? "err" : "";
       }
 
       async function runAnalyze() {
         const before = beforeInput.files?.[0];
         const after = afterInput.files?.[0];
-        if (!before || !after) {
-          setStatus("請先選擇兩份 PDF", true);
+        if (!before || !after || analyzeBtn.disabled) {
+          setStatus("請先選擇兩份未超過 50 MB 的 PDF", true);
           return;
         }
 
@@ -674,6 +880,9 @@
         analyzeSectionEl.style.display = "block";
         analyzeOverallEl.style.display = "none";
         analyzeListEl.innerHTML = "";
+        analyzeBrowserEl.style.display = "none";
+        analyzeBrowserBeforePagesEl.innerHTML = "";
+        analyzeBrowserAfterPagesEl.innerHTML = "";
         startAnalyzeTimer();
 
         try {
@@ -697,12 +906,6 @@
           stopAnalyzeTimer(
             `LLM 分析完成：共分析 ${pages.length} 個差異頁面（候選 ${summary.candidate_pages || 0} / ${summary.total_slots || 0} 頁）`
           );
-
-          // 整體摘要
-          if (data.overall_summary) {
-            analyzeOverallEl.style.display = "block";
-            analyzeOverallEl.textContent = `整體摘要：${data.overall_summary}`;
-          }
 
           // 各頁結果
           if (!pages.length) {
@@ -728,26 +931,81 @@
             const stateText = stateLabels[p.state] || p.state;
             const impText = importanceLabel[p.importance] || p.importance;
 
-            item.innerHTML = `
-              <div class="analyze-item-head">
-                <span>槽位 ${p.slot}｜${stateText}（before:${bp} → after:${ap}）</span>
-                <span class="importance-badge ${p.importance}">${impText}</span>
-                <span class="mono" style="font-size:11px;color:#888;margin-left:auto">
-                  image:${(p.image_diff ?? 0).toFixed(3)} text:${(p.text_diff ?? 0).toFixed(3)}
-                </span>
-              </div>
-              <div class="analyze-summary-text">${p.summary || "（無摘要）"}</div>
-              <ul class="analyze-changes">
-                ${(p.changes || []).map((c) => {
-                  const fr = isReorderChangeItem(c) ? "1" : "0";
-                  const fv = isVersionChangeItem(c) ? "1" : "0";
-                  return `<li class="${c.type}" data-fr="${fr}" data-fv="${fv}">[${c.type}] ${c.description}</li>`;
-                }).join("")}
-              </ul>
-            `;
+            // head row: 用 DOM 建立，避免 innerHTML 內的 listener 跑掉
+            const head = document.createElement("div");
+            head.className = "analyze-item-head";
+
+            const titleSpan = document.createElement("span");
+            titleSpan.textContent = `槽位 ${p.slot}｜${stateText}（before:${bp} → after:${ap}）`;
+
+            const badge = document.createElement("span");
+            badge.className = `importance-badge ${p.importance}`;
+            badge.textContent = impText;
+
+            const diffSpan = document.createElement("span");
+            diffSpan.className = "mono";
+            diffSpan.style.cssText = "font-size:11px;color:#888;margin-left:auto";
+            diffSpan.textContent = `image:${(p.image_diff ?? 0).toFixed(3)} text:${(p.text_diff ?? 0).toFixed(3)}`;
+
+            const jumpBtn = document.createElement("button");
+            jumpBtn.className = "jump-preview-btn";
+            jumpBtn.textContent = "↓ 跳至預覽";
+            jumpBtn.addEventListener("click", () => {
+              const slotId = p.slot;
+              const browser = document.getElementById("analyzeBrowser");
+              browser.style.display = "";
+              // main window 瞬間跳到 browser
+              browser.scrollIntoView({ behavior: "instant", block: "start" });
+              const beforeCard = document.getElementById(`analyze-before-slot-${slotId}`);
+              if (beforeCard) {
+                const pane = document.getElementById("analyzeBrowserBefore");
+                const headerHeight = pane.querySelector("h4")?.offsetHeight || 0;
+                pane.scrollTop = beforeCard.offsetTop - headerHeight;
+                beforeCard.style.outline = "2px solid #3b82f6";
+                setTimeout(() => { beforeCard.style.outline = ""; }, 1800);
+              }
+              const afterCard = document.getElementById(`analyze-after-slot-${slotId}`);
+              if (afterCard) {
+                const pane = document.getElementById("analyzeBrowserAfter");
+                const headerHeight = pane.querySelector("h4")?.offsetHeight || 0;
+                pane.scrollTop = afterCard.offsetTop - headerHeight;
+                afterCard.style.outline = "2px solid #3b82f6";
+                setTimeout(() => { afterCard.style.outline = ""; }, 1800);
+              }
+            });
+
+            head.appendChild(titleSpan);
+            head.appendChild(badge);
+            head.appendChild(diffSpan);
+            head.appendChild(jumpBtn);
+            item.appendChild(head);
+
+            const changesList = p.changes || [];
+            // 若該槽位沒有變更清單（如純排版位移），才顯示單頁說明，避免與下方變更列表重複
+            if (p.summary && p.summary.trim() && changesList.length === 0) {
+              const summaryDiv = document.createElement("div");
+              summaryDiv.className = "analyze-summary-text";
+              summaryDiv.textContent = p.summary;
+              item.appendChild(summaryDiv);
+            }
+
+            const ul = document.createElement("ul");
+            ul.className = "analyze-changes";
+            changesList.forEach((c) => {
+              const li = document.createElement("li");
+              li.className = c.type;
+              li.dataset.fv = isVersionChangeItem(c) ? "1" : "0";
+              li.textContent = `[${c.type}] ${c.description}`;
+              ul.appendChild(li);
+            });
+            item.appendChild(ul);
+
+            if (changesList.length === 0) {
+              item.classList.add("no-changes");
+            }
+
             analyzeListEl.appendChild(item);
           });
-          applyHideReorder();
           applyHideVersion();
           // 渲染 PDF 瀏覽器
           if (data.all_slots && data.all_slots.length) {
@@ -776,19 +1034,7 @@
         scheduleAnalyzeSyncHeights();
       });
 
-      let hideReorderActive = false;
       let hideVersionActive = false;
-
-      // 判斷單一 change 項目是否為頁面重排類
-      function isReorderChangeItem(c) {
-        if (c.category === "reorder") return true;
-        // fallback：舊版資料無 category 時改用關鍵字
-        const desc = c.description || "";
-        return desc.includes("頁碼從") || desc.includes("頁碼由") || desc.includes("頁面重排") ||
-               desc.includes("頁碼遞移") || desc.includes("遞移至") ||
-               desc.includes("頁碼偏移") || desc.includes("版面調整") || desc.includes("頁碼同步更新") ||
-               desc.includes("內容無實質變更");
-      }
 
       // 判斷單一 change 項目是否為版本號/日期/版權類變更
       function isVersionChangeItem(c) {
@@ -811,31 +1057,6 @@
           const allHidden = Array.from(lis).every((li) => li.classList.contains("filtered-hidden"));
           card.classList.toggle("all-changes-hidden", allHidden);
         });
-      }
-
-      function toggleHideReorder() {
-        hideReorderActive = !hideReorderActive;
-        applyHideReorder();
-      }
-
-      function applyHideReorder() {
-        const btn = document.getElementById("hideReorderBtn");
-        const hint = document.getElementById("hideReorderHint");
-        let count = 0;
-        analyzeListEl.querySelectorAll(".analyze-changes li[data-fr='1']").forEach((li) => {
-          li.classList.toggle("filtered-hidden", hideReorderActive);
-          count++;
-        });
-        syncCardVisibility();
-        if (hideReorderActive) {
-          btn.textContent = "顯示頁面重排";
-          btn.style.background = "#0868c6";
-          hint.textContent = `已隱藏 ${count} 個頁面重排項目`;
-        } else {
-          btn.textContent = "隱藏頁面重排";
-          btn.style.background = "#475569";
-          hint.textContent = count ? `共 ${count} 個頁面重排項目` : "";
-        }
       }
 
       function toggleHideVersion() {
@@ -863,9 +1084,33 @@
         }
       }
 
-      applyHideReorder();
       applyHideVersion();
+      beforeInput.addEventListener("change", () => updateFileState(beforeInput, beforeMeta));
+      afterInput.addEventListener("change", () => updateFileState(afterInput, afterMeta));
+      updateFileState(beforeInput, beforeMeta);
+      updateFileState(afterInput, afterMeta);
       analyzeBtn.addEventListener("click", runAnalyze);
+
+      // 「跳至最上方」按鈕顯示與隱藏及滾動邏輯
+      const scrollToTopBtn = document.getElementById("scrollToTopBtn");
+
+      // 監聽網頁滾動
+      window.addEventListener("scroll", () => {
+        // 當網頁滾動高度超過 300px 時顯示按鈕，否則隱藏
+        if (window.scrollY > 300) {
+          scrollToTopBtn.classList.add("show");
+        } else {
+          scrollToTopBtn.classList.remove("show");
+        }
+      });
+
+      // 點擊按鈕時，平滑移動至頂端
+      scrollToTopBtn.addEventListener("click", () => {
+        window.scrollTo({
+          top: 0,
+          behavior: "smooth"
+        });
+      });
     </script>
   </body>
 </html>

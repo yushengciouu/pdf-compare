@@ -17,11 +17,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 複製應用程式碼
 COPY app ./app
 
-# 建立非 root 使用者以提升安全性
-RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser \
-    && mkdir -p /var/compare/jobs \
-    && chown -R appuser:appgroup /app /var/compare
-
-USER appuser
-
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
