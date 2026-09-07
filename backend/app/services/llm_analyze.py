@@ -52,7 +52,6 @@ class PageAnalysis:
     changes: list[
         dict
     ]  # [{"type": "added"|"removed"|"modified", "description": "..."}]
-    importance: str  # "low" | "medium" | "high"
 
 
 @dataclass
@@ -508,7 +507,7 @@ def _build_prompt(
 - 若圖片與文字差異不一致，以**文字差異為準**，但仍說明圖片目視結果
 - 就算差異看似微小，只要確認存在差異，就必須如實列出，不得略過
 - 【重要過濾優化規則】：
-  1. 對於純粹的「頁碼變更（頁碼數字從 X 變更為 Y）」或「純粹的頁面位移（由於前文增刪導致的排版平移）」，除非該頁伴隨著「文字、金額、日期、規章文字、表格等實質欄位」之實質修改，否則【請完全不要耗費描述算力分析它】。只要它沒有任何實質內容（Content）變更，不論它頁碼如何偏移，請將其 importance 設為 "low"，且【嚴禁】在 changes 列表中生成諸如「頁碼從 X 變更為 Y」、「頁碼從 12 變更為 13」這類純頁碼遞增或排版位移的 changes！請確保 changes 陣列為空 `[]`（這類純重排已由系統在 prefilter 端和 Python 端自動低成本標記好！不需要 LLM 像記流水帳一樣逐頁書寫頁碼變更，避免浪費算力與 Token 空間）。
+  1. 對於純粹的「頁碼變更（頁碼數字從 X 變更為 Y）」或「純粹的頁面位移（由於前文增刪導致的排版平移）」，除非該頁伴隨「文字、金額、日期、規章文字、表格等實質欄位」之實質修改，否則【請完全不要耗費描述算力分析它】，且【嚴禁】在 changes 列表中生成諸如「頁碼從 X 變更為 Y」、「頁碼從 12 變更為 13」這類純頁碼遞增或排版位移的 changes！請確保 changes 陣列為空 `[]`（這類純重排已由系統在 prefilter 端和 Python 端自動低成本標記好！不需要 LLM 像記流水帳一樣逐頁書寫頁碼變更，避免浪費算力與 Token 空間）。
   2. 同理，目錄（Table of Contents）中的純頁碼偏移遞移或排版變化，如果只是因為後面章節排版順延導致的「文字目錄頁碼數字改變」，實質上的章節與文字規章並無修改，亦【不需要】輸出 changes！只有在目錄中有「新增了全新章節名稱」或「刪除了某章節」時才需輸出 added 或 removed changes。
   3. 即：只有在頁面有實質內容（"category": "content"）變動、或存在有重大意涵的管理資訊變動時才需要列出。若是純頁面重排、純頁碼改變且沒有實質文字修改，請直接將此頁的 changes 陣列留空 `[]`！
 
@@ -524,7 +523,7 @@ def _build_prompt(
 當文件中有新增頁（inserted）或刪除頁（deleted）時，後續章節的編號會整體偏移。
 - 若 before 頁有「5.5.6 OQC」，after 頁有「5.5.7 OQC」，內容相同 → 應判斷為 modified（章節號碼因新增章節而遞移），**不得**判斷為 removed
 - 只有當某段內容在 before 存在，且在整個 after 文件中完全找不到對應內容時，才能判斷為 removed
-- 章節號碼的改變本身屬於 modified（格式/編號調整），重要度通常為 low 或 medium
+- 章節號碼的改變本身屬於 modified（格式/編號調整）
 
 《跨頁位移判斷規則（重要）》
 頁面配對演算法偶爾會因版面差異過大而將「位移的頁面」誤標為 inserted 或 deleted。
@@ -537,7 +536,7 @@ def _build_prompt(
 2. 許多所謂刪除或新增可能僅僅是「跨頁溢出」（即上一頁文字流動到了下一頁）。
 3. 【關鍵步驟 - 判斷跨頁與槽位溢出】：對 diff 中每一行以「+」或「-」開頭的段落或章節（如 5.5.6 OQC 檢驗之說明），請優先對照前後相鄰槽位（Slot N-1, Slot N+1）的文字：
    - 若段落內容同時在一個槽位被標為 `-` (刪除) 且在相鄰槽位被標為 `+` (新增) → 這代表純粹的跨頁溢出或頁面重排，**禁止**將其判定為實質刪除（removed）或實質新增（added）！
-   - 請將此類項目歸類為 category: "reorder"（描述：因頁面重排、文字流動而溢出至相鄰頁面，無實質改變），重要度設為 low，或直接忽略不提。
+   - 請將此類項目歸類為 category: "reorder"（描述：因頁面重排、文字流動而溢出至相鄰頁面，無實質改變），或直接忽略不提。
 4. 【配對頁中的 added 內容 / 新增頁（非目錄）】：對「配對頁（paired）」中產生的實質新增內容、或是「新增頁（inserted，且該頁內容非目錄）」：搜尋其關鍵文字（章節號碼、段落首句）是否單純因偏移而已出現在舊版索引（B###）中的相鄰頁 → 若是，則該內容極可能是「頁面位移」而非真正的新增。
    - 注意：如果該頁的內容是「目錄（Table of Contents）」，則**絕不**進行此類跨頁位移判定！目錄中出現別的頁面的章節標題是完全正常的，絕不能判定為頁面位移或頁面重排。
 5. 【配對頁中的 removed 內容 / 刪除頁（非目錄）】：同理，對「配對頁（paired）」中的刪除內容或「刪除頁（deleted，非目錄）」：搜尋其關鍵文字是否已出現在新版索引（A###）中 → 若是，極可能是跨頁位移。
@@ -553,7 +552,7 @@ def _build_prompt(
 
 《重排與實質內容變更並存判定規則（極重要）》
 - 即使某個配對槽位（paired）因為文件排版、跨頁位移等原因整體發生了重排（如舊版第 47 頁的內容被移動至新版第 54 頁），你【絕對不能】因為該頁有大量重排的內容，就直接下結論為「純頁面重排、無實質更動」而漏掉裡面的重要細節！
-- 只要在該頁面的文字差異（unified diff）中，看見了任何實質性的新增、刪除或修改（例如在 5.15.5 Advanced Package 規範中：新增了參考文件 / W-333 For 2.5D and 3D Device OSAT Qualification Working Instruction，或者修改了數字、修訂了規格描述），該槽位的重要度就【必須】設為 "high" 或 "medium"，並且寫出具體的實質變動。
+- 只要在該頁面的文字差異（unified diff）中，看見了任何實質性的新增、刪除或修改（例如在 5.15.5 Advanced Package 規範中：新增了參考文件 / W-333 For 2.5D and 3D Device OSAT Qualification Working Instruction，或者修改了數字、修訂了規格描述），並且寫出具體的實質變動。
 - 對於這類重排與實質變更並存的槽位：
   1. 在 summary 中清楚、完整指出兩者，例如：「頁面位移與內容修訂，5.15.5 節新增參考文件 W-333。」
   2. 在 changes 中，你【必須同時】輸出多個變更，不可合併成一條或省略實質變更！
@@ -573,7 +572,7 @@ def _build_prompt(
 - 若 diff 中出現 '+Figure X-N' 或 '+Table X-N'，先查【舊版鄰頁文字】是否有相同用途但編號較小的 'Figure X-M' 或 'Table X-M'（M < N）
 - 若欄位結構、欄位名稱（如 AUTOMOTIVE_PRODUCT、OUTLIER_SCREEN 等）或圖表說明文字實質相同，則這只是**編號遞移**，不是新增
 - 只有當新版圖表的欄位、內容與舊版所有圖表都不相同時，才列為 added
-- 編號遞移本身可列為 modified（描述：Figure 5-10 更名為 Figure 5-12 / Table 5-2 更名為 Table 5-3），importance 為 low
+- 編號遞移本身可列為 modified（描述：Figure 5-10 更名為 Figure 5-12 / Table 5-2 更名為 Table 5-3）
 
 請嚴格依照以下 JSON 格式回傳，不要輸出任何格式說明文字，只輸出 JSON：
 
@@ -581,7 +580,6 @@ def _build_prompt(
   "pages": [
     {
       "slot": <槽位編號，整數>,
-      "importance": "low | medium | high",
       "changes": [
         {"type": "added",    "category": "content",  "description": "（新增了什麼）"},
         {"type": "removed",  "category": "content",  "description": "（刪除了什麼）"},
@@ -791,7 +789,6 @@ def _parse_llm_response(raw: str, candidates: list[dict]) -> dict:
         parsed.setdefault("pages", []).append(
             {
                 "slot": slot_no,
-                "importance": "medium",
                 "summary": "LLM 未提供此頁分析",
                 "changes": [],
                 "_missing": True,
@@ -1315,14 +1312,13 @@ def _cross_match_and_correct_changes(
                         change["category"] = "reorder"
                         change["description"] = f"{desc}"
 
-    # 4. 如果一個頁面裡所有的 changes 最終都被修正成了 category="reorder"，則將該頁重要度調降為 Importance = "low"
+    # 4. 如果一個頁面裡所有的 changes 最終都被修正成了 category="reorder"，則修飾 summary
     for page in merged_pages:
         changes = page.get("changes", [])
         if not changes:
             continue
         all_reorder = all(c.get("category") == "reorder" for c in changes)
         if all_reorder:
-            page["importance"] = "low"
             old_summary = page.get("summary", "")
             if any(kw in old_summary for kw in ["新增", "刪除", "移除", "added", "removed"]):
                 bp = page.get("before_page")
@@ -1446,8 +1442,8 @@ def _deduplicate_cross_slot_reflows(merged_pages: list[dict]) -> list[dict]:
                 rem_item["change"]["description"] = f"{rem_item['desc']}"
                 break
 
-    # 3. 重新校準所有頁面的 Importance 與 Summary
-    # 如果一個頁面裡所有的 changes 都被標記成了 category="reorder"，則調降為 Importance = "low"
+    # 3. 重新校準所有頁面的 Summary
+    # 如果一個頁面裡所有的 changes 都被標記成了 category="reorder"，則修飾 Summary
     for page in merged_pages:
         changes = page.get("changes", [])
         if not changes:
@@ -1455,7 +1451,6 @@ def _deduplicate_cross_slot_reflows(merged_pages: list[dict]) -> list[dict]:
         
         all_reorder = all(c.get("category") == "reorder" for c in changes)
         if all_reorder:
-            page["importance"] = "low"
             # 重新修飾 summary，避免 LLM 的「新增/刪除」字眼殘留
             old_summary = page.get("summary", "")
             if any(kw in old_summary for kw in ["新增", "刪除", "移除", "added", "removed"]):
@@ -1675,7 +1670,6 @@ def build_analyze_report(
                     for c in batch_cands:
                         err_pages.append({
                             "slot": int(c["slot"]),
-                            "importance": "high",
                             "summary": f"該插槽在分批 [Batch] 分析中呼叫失敗: {e}",
                             "changes": [],
                             "_error": True,
@@ -1722,7 +1716,6 @@ def build_analyze_report(
                         "image_diff": candidate.get("image_diff", 0.0),
                         "text_diff": candidate.get("text_diff", 0.0),
                         "reason": candidate.get("reason", ""),
-                        "importance": "low",
                         "summary": reflow_summary,
                         "changes": [],
                     }
@@ -1730,7 +1723,6 @@ def build_analyze_report(
             else:
                 llm_page = slot_to_llm.get(slot_no, {})
                 state = candidate["state"]
-                importance = llm_page.get("importance", "medium")
                 summary = llm_page.get("summary", "").strip()
                 changes = llm_page.get("changes", [])
 
@@ -1793,7 +1785,6 @@ def build_analyze_report(
                         "image_diff": candidate.get("image_diff", 0.0),
                         "text_diff": candidate.get("text_diff", 0.0),
                         "reason": candidate.get("reason", ""),
-                        "importance": importance,
                         "summary": summary,
                         "changes": changes,
                     }

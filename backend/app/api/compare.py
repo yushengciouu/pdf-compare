@@ -93,7 +93,7 @@ async def run_llm_analyze(
     2. 執行 prefilter，找出差異候選頁
     3. 對每個候選頁附上 before/after 截圖 + 文字 diff
     4. 一次送入 vLLM（Gemma4）進行分析
-    5. 回傳結構化 JSON，每頁含：importance / summary / changes
+    5. 回傳結構化 JSON，每頁含：summary / changes
 
     注意：此端點會直接呼叫 LLM，需要 LLM 服務可用，且耗時較長。
     """

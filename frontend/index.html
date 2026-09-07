@@ -346,29 +346,6 @@
         width: auto;
       }
       .jump-preview-btn:hover { background: #2563eb; }
-      .importance-badge {
-        display: inline-block;
-        padding: 2px 9px;
-        border-radius: 999px;
-        font-size: 11px;
-        font-weight: 700;
-        border: 1px solid transparent;
-      }
-      .importance-badge.high {
-        background: #fef2f2;
-        color: #991b1b;
-        border-color: #fca5a5;
-      }
-      .importance-badge.medium {
-        background: #fffbeb;
-        color: #92400e;
-        border-color: #fcd34d;
-      }
-      .importance-badge.low {
-        background: #f0fdf4;
-        color: #166534;
-        border-color: #86efac;
-      }
       .analyze-summary-text {
         color: #3d3355;
         margin-bottom: 6px;
@@ -919,7 +896,6 @@
             return;
           }
 
-          const importanceLabel = { high: "高度重要", medium: "一般變更", low: "輕微變更" };
           const stateLabels = { paired: "配對頁", inserted: "新增頁", deleted: "刪除頁" };
 
           pages.forEach((p) => {
@@ -929,7 +905,6 @@
             const bp = p.before_page ?? "-";
             const ap = p.after_page ?? "-";
             const stateText = stateLabels[p.state] || p.state;
-            const impText = importanceLabel[p.importance] || p.importance;
 
             // head row: 用 DOM 建立，避免 innerHTML 內的 listener 跑掉
             const head = document.createElement("div");
@@ -937,10 +912,6 @@
 
             const titleSpan = document.createElement("span");
             titleSpan.textContent = `槽位 ${p.slot}｜${stateText}（before:${bp} → after:${ap}）`;
-
-            const badge = document.createElement("span");
-            badge.className = `importance-badge ${p.importance}`;
-            badge.textContent = impText;
 
             const diffSpan = document.createElement("span");
             diffSpan.className = "mono";
@@ -975,7 +946,6 @@
             });
 
             head.appendChild(titleSpan);
-            head.appendChild(badge);
             head.appendChild(diffSpan);
             head.appendChild(jumpBtn);
             item.appendChild(head);

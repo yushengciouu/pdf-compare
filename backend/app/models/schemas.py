@@ -79,7 +79,6 @@ class ComparePageResponse(BaseModel):
 # LLM 分析相關 schemas
 # ---------------------------------------------------------------------------
 
-ImportanceLevel = Literal["low", "medium", "high"]
 ChangeType = Literal["added", "removed", "modified"]
 
 
@@ -96,7 +95,6 @@ class PageAnalysisResult(BaseModel):
     image_diff: float = 0.0
     text_diff: float = 0.0
     reason: str = ""
-    importance: ImportanceLevel = "medium"
     summary: str = ""
     changes: list[PageChange] = Field(default_factory=list)
 
