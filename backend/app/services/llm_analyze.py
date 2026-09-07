@@ -508,7 +508,10 @@ def _build_prompt(
 - 就算差異看似微小，只要確認存在差異，就必須如實列出，不得略過
 - 【重要過濾優化規則】：
   1. 對於純粹的「頁碼變更（頁碼數字從 X 變更為 Y）」或「純粹的頁面位移（由於前文增刪導致的排版平移）」，除非該頁伴隨「文字、金額、日期、規章文字、表格等實質欄位」之實質修改，否則【請完全不要耗費描述算力分析它】，且【嚴禁】在 changes 列表中生成諸如「頁碼從 X 變更為 Y」、「頁碼從 12 變更為 13」這類純頁碼遞增或排版位移的 changes！請確保 changes 陣列為空 `[]`（這類純重排已由系統在 prefilter 端和 Python 端自動低成本標記好！不需要 LLM 像記流水帳一樣逐頁書寫頁碼變更，避免浪費算力與 Token 空間）。
-  2. 同理，目錄（Table of Contents）中的純頁碼偏移遞移或排版變化，如果只是因為後面章節排版順延導致的「文字目錄頁碼數字改變」，實質上的章節與文字規章並無修改，亦【不需要】輸出 changes！只有在目錄中有「新增了全新章節名稱」或「刪除了某章節」時才需輸出 added 或 removed changes。
+  2. 【嚴禁回報任何「頁碼遞移 / 頁碼順延」變更】：
+     - 當前文有新增或刪除章節/頁面時，後續章節在「目錄（Table of Contents）」或文末/各標題對應的頁碼數字會整體順延遞移（例如：「因新增章節導致後續章節頁碼遞移：References 由 25 頁變為 29 頁，Attachment 由 28 頁變為 30 頁，Exhibit 1 由 29 頁變為 31 頁」）。
+     - 【極重要】：使用者「完全不需要」此類頁碼遞移/頁碼順延的排版資訊！這純屬排版自動順延的流水帳，【嚴禁輸出為 changes】！
+     - 只有在目錄中真正「新增了全新章節名稱」或「刪除了某章節」時才需輸出 added 或 removed changes。若僅是章節對應的頁碼數字變動，請一律忽視，將 changes 陣列直接留空 `[]`！
   3. 即：只有在頁面有實質內容（"category": "content"）變動、或存在有重大意涵的管理資訊變動時才需要列出。若是純頁面重排、純頁碼改變且沒有實質文字修改，請直接將此頁的 changes 陣列留空 `[]`！
 
 《微小更動與格式誤差忽略規則（保護條款 - 極重要）》
@@ -545,7 +548,7 @@ def _build_prompt(
 
 《新增頁（inserted）與刪除頁（deleted）的特殊判定規則（極重要）》
 - 新增頁面/刪除頁面（物理上非配對槽位）：
-  - 【不要與配對頁（paired）混淆】：配對頁（before 與 after 皆有頁碼）才可能有「內容重排/頁碼遞移等 modified/reorder 變更」。
+  - 【不要與配對頁（paired）混淆】：配對頁（before 與 after 皆有頁碼）才可能有「內容重排等 modified/reorder 變更」。
   - 【新增頁面（inserted, before:-）】：該槽位在新版中是物理上新增的頁面，舊版完全不存在。因此，對於新增頁中的所有內容，**必須將其判定為新增（added）**，不可判定為「修改（modified）」或「重排（reorder）」。不論其內容是正文還是目錄的延續，只要其 state 為「新增頁（inserted）」，其產生的變更 type 必須是 `"added"`、category 必須是 `"content"`，絕對不可產生 `"type": "modified"` 或 `"category": "reorder"` 的變更！
   - 【不要因目錄誤判重排】：如果新增頁（inserted）的內容是「目錄（Table of Contents）的延續」，它仍然是物理上新增的頁面！請將其總結為「新增目錄頁面，包含……」，並將變更項目設為 `"type": "added"`，**禁止**因為目錄中的部分章節標題在舊版其他內容頁面出現過，就將整頁或其內容歸類為「頁面重排（reorder）」或「modified」。
   - 【刪除頁（deleted, after:-）】：邏輯同理。對於刪除頁中的所有內容，**必須將其判定為刪除（removed）**，不可判定為「重排（reorder）」或「修改（modified）」。其產生的變更 type 必須是 `"removed"`、category 必須是 `"content"`。
@@ -584,7 +587,7 @@ def _build_prompt(
         {"type": "added",    "category": "content",  "description": "（新增了什麼）"},
         {"type": "removed",  "category": "content",  "description": "（刪除了什麼）"},
         {"type": "modified", "category": "content",  "description": "（修改了什麼，從「舊內容」改為「新內容」）"},
-        {"type": "modified", "category": "reorder",  "description": "（頁碼/章節號/圖表編號純粹遞移，內容無實質變更）"},
+        {"type": "modified", "category": "reorder",  "description": "（章節號碼/圖表編號因增刪順延遞移，內容無實質變更）"},
         {"type": "modified", "category": "version",  "description": "（文件版本號、發布日期、版權年份等行政資訊變更）"}
       ]
     }
@@ -594,7 +597,7 @@ def _build_prompt(
 《category 欄位說明》
 每個 change 項目必須填入以下三種 category 之一：
 - "content"：實質內容新增、刪除或修改（預設值，大多數 change 屬於此類）
-- "reorder"：頁碼偏移、章節號碼遞移（例如 2.1→2.2）、圖表編號遞移（例如 Table 1→Table 2）等純格式/排版變更，內容無實質差異
+- "reorder"：章節號碼遞移（例如 2.1→2.2）、圖表編號遞移（例如 Table 1→Table 2）等純編號格式調整，內容無實質差異。（⚠️ 注意：頁碼數字變動、目錄頁碼順延、頁碼遞移皆非實質更動，嚴禁回報為 reorder 或任何 change，必須直接忽略！）
 - "version"：文件版本號（Rev. No.、Version）、發布日期（Release date、發佈日期）、版權年份（© 20XX）等行政資訊變更
 
 重要度判斷標準：
@@ -1479,6 +1482,62 @@ def _generate_overall_summary(pages_results: list[dict], settings: Settings) -> 
         return "本次對照包含多處頁面重排、條款新增及格式微調。"
 
 
+def _is_page_shift_or_pure_page_change(change: dict) -> bool:
+    """
+    判斷某個變更是否純粹是因增刪頁面導致的頁碼遞移、目錄頁碼順延或單純頁碼變更流水帳。
+    例如：
+    - 「因新增章節導致後續章節頁碼遞移：References 由 25 頁變為 29 頁，Attachment 由 28 頁變為 30 頁...」
+    - 「頁碼由 15 變更為 16」
+    - 「References 由 25 頁變為 29 頁」
+    - 「目錄頁碼順延」
+    - reorder 類別中僅描述頁碼數字變更
+    此類資訊使用者不需要，應徹底過濾。
+    """
+    import re
+    desc = change.get("description", "").strip()
+    category = change.get("category", "")
+
+    if not desc:
+        return True
+
+    # 1. 完整匹配常見單純頁碼變更或重排詞
+    if desc in ["頁碼變更", "頁面重排", "純頁碼改變", "頁碼遞移", "頁碼偏移", "目錄頁碼順延", "頁碼調整"]:
+        return True
+
+    # 2. 含有明確的頁碼順延/遞移關鍵詞彙
+    shift_keywords = [
+        "頁碼遞移", "頁碼順延", "頁碼偏移", "頁碼平移", "後續章節頁碼", "章節頁碼", "目錄頁碼"
+    ]
+    if any(kw in desc for kw in shift_keywords):
+        return True
+
+    # 3. 匹配描述中出現章節或項目頁碼順延（例如：「References 由 25 頁變為 29 頁」、「由 12 頁改為 13 頁」）
+    if re.search(r"(?:從|由)?\s*\d+\s*頁\s*(?:變更為|移至|位移至|移動至|變為|改為|調整為|遞移至|到)\s*\d+\s*頁", desc):
+        return True
+
+    # 4. 匹配「由第 X 頁...至第 Y 頁」
+    if re.search(r"(?:從|由)?\s*第\s*\d+\s*頁\s*(?:變更為|移至|位移至|移動至|變為|改為|調整為|遞移至|到)\s*第\s*\d+\s*頁", desc):
+        return True
+
+    # 5. 匹配「頁碼由/從 X 變更為 Y」
+    if re.search(r"頁碼\s*(?:從|由)?\s*\d+\s*(?:變更為|移至|位移至|移動至|變為|改為|調整為|遞移至|到)\s*\d+", desc):
+        return True
+
+    # 6. 單純的頁碼/槽位流水帳（例如：「12 變更為 13」、「頁碼從 1 變更為 2」）
+    pure_page_pattern = re.compile(
+        r"^(頁碼|頁面|槽位)?\s*(從|由)?\s*\d+\s*(變更為|移至|位移至|移動至|變為|到)\s*\d+\s*(\(頁面重排\))?$",
+        re.IGNORECASE
+    )
+    if pure_page_pattern.match(desc):
+        return True
+
+    # 7. category == "reorder" 且描述主要是關於頁碼/頁數
+    if category == "reorder" and ("頁碼" in desc or re.search(r"\d+\s*頁", desc)):
+        return True
+
+    return False
+
+
 def build_analyze_report(
     before_pdf: Path,
     after_pdf: Path,
@@ -1782,21 +1841,20 @@ def build_analyze_report(
         # 進行全文跨頁文字實體對照二檢二次校正（防範 H200 分批分析下的虛假新增/刪除）
         merged_pages = _cross_match_and_correct_changes(merged_pages, before_texts, after_texts)
 
-        # 這裡過濾掉單純的頁碼流水帳（description 僅含有頁碼/頁面/Slot 變更等，無實質業務字詞）
-        import re
-        pure_page_pattern = re.compile(
-            r"^(頁碼|頁面|槽位)?\s*(從|由)?\s*\d+\s*(變更為|移至|位移至|移動至|變為|到)\s*\d+\s*(\(頁面重排\))?$",
-            re.IGNORECASE
-        )
+        # Step 9：過濾掉因新增/刪除章節導致的頁碼遞移、目錄頁碼順延、純頁碼流水帳等無須回報的資訊
         for page in merged_pages:
-            filtered_changes = []
-            for change in page.get("changes", []):
-                desc = change.get("description", "").strip()
-                # 若完全匹配單純頁碼變更的正則，且非 added (多為 modified)，或者是 reorder 類別中只講頁碼，則略過
-                if pure_page_pattern.match(desc) or desc in ["頁碼變更", "頁面重排", "純頁碼改變"]:
-                    continue
-                filtered_changes.append(change)
+            filtered_changes = [
+                c for c in page.get("changes", [])
+                if not _is_page_shift_or_pure_page_change(c)
+            ]
             page["changes"] = filtered_changes
+            if not filtered_changes:
+                # 若該頁過濾後無實質變更，清理 summary 避免殘留頁碼遞移等描述
+                if any(kw in page.get("summary", "") for kw in ["頁碼", "遞移", "順延", "偏移"]):
+                    page["summary"] = "純頁面排版與頁碼順延，無實質文字修改"
+            else:
+                # 重新根據過濾後的實質變更產生 summary
+                page["summary"] = "；".join(c.get("description", "").strip() for c in filtered_changes if c.get("description"))
 
         # 暫不隱藏，所有 type/category（包含 reorder、version）均完整傳給前端渲染
         # 建立 slot → changes 對照表，傳給 _persist_renders 做文字搜尋
