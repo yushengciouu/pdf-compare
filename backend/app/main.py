@@ -9,6 +9,7 @@ from pathlib import Path
 from app.api.compare import router as compare_router
 from app.core.config import get_settings
 from app.services.storage import cleanup_expired_jobs, cleanup_llm_debug, load_meta, save_meta
+from app.services.html_report import cleanup_expired_reports
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,10 @@ async def _periodic_cleanup(settings) -> None:
                 cleanup_llm_debug(settings)
             except Exception as e:
                 logger.error("cleanup_llm_debug error: %s", e)
+            try:
+                cleanup_expired_reports(settings)
+            except Exception as e:
+                logger.error("cleanup_expired_reports error: %s", e)
             hours_since_llm_cleanup = 0
 
 
@@ -54,6 +59,10 @@ async def _periodic_cleanup(settings) -> None:
 async def lifespan(app: FastAPI):
     _settings = get_settings()
     _recover_stuck_jobs(_settings)
+    try:
+        cleanup_expired_reports(_settings)
+    except Exception as e:
+        logger.error("Startup cleanup_expired_reports error: %s", e)
     cleanup_task = asyncio.create_task(_periodic_cleanup(_settings))
     yield
     cleanup_task.cancel()

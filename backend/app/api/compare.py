@@ -1,4 +1,5 @@
 import json
+import logging
 import shutil
 import tempfile
 from datetime import datetime
@@ -24,7 +25,10 @@ from app.services.storage import (
 )
 from app.services.llm_analyze import build_analyze_report
 from app.services.prefilter import Thresholds
+from app.services.html_report import generate_html_report, save_html_report
 from app.workers.tasks import run_compare_job
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/compare", tags=["compare"])
 
@@ -121,6 +125,22 @@ async def run_llm_analyze(
         )
 
         result = build_analyze_report(before_path, after_path, settings, thresholds)
+
+        # 產生獨立 HTML 分析報告並自動存入 log/ 資料夾
+        try:
+            report_html = generate_html_report(
+                before_filename=before.filename or "before.pdf",
+                after_filename=after.filename or "after.pdf",
+                report_data=result,
+                model_name=selected_model,
+                settings=settings,
+            )
+            report_filename, _ = save_html_report(settings, report_html)
+            result["report_html"] = report_html
+            result["report_filename"] = report_filename
+        except Exception as e:
+            logger.error("Failed to generate or save HTML report: %s", e)
+
         return AnalyzeResponse.model_validate(result)
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))

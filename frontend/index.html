@@ -573,6 +573,7 @@
         <div id="analyzeSection" style="margin-top: 10px; display: none;">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
             <button id="hideVersionBtn" type="button" style="background:#475569;min-width:0;width:auto;padding:6px 14px;font-size:13px;" onclick="toggleHideVersion()">隱藏版本號變更</button>
+            <button id="downloadReportBtn" type="button" style="background:#1769a8;min-width:0;width:auto;padding:6px 14px;font-size:13px;display:none;" onclick="downloadHtmlReport()">📥 下載 HTML 結果報告</button>
             <span id="hideVersionHint" style="font-size:12px;color:#637083;"></span>
           </div>
           <div id="analyzeStatus" class="empty-note">
@@ -628,6 +629,23 @@
       const analyzeBrowserAfterPagesEl = document.getElementById("analyzeBrowserAfterPages");
       const analyzeBrowserBeforePane = document.getElementById("analyzeBrowserBefore");
       const analyzeBrowserAfterPane = document.getElementById("analyzeBrowserAfter");
+      const downloadReportBtnEl = document.getElementById("downloadReportBtn");
+
+      let currentReportHtml = null;
+      let currentReportFilename = null;
+
+      function downloadHtmlReport() {
+        if (!currentReportHtml) return;
+        const blob = new Blob([currentReportHtml], { type: "text/html;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = currentReportFilename || "pdf_compare_report.html";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
 
       let analyzeTimerInterval = null;
       let analyzeStartedAt = null;
@@ -854,6 +872,9 @@
         }
 
         analyzeBtn.disabled = true;
+        if (downloadReportBtnEl) downloadReportBtnEl.style.display = "none";
+        currentReportHtml = null;
+        currentReportFilename = null;
         analyzeSectionEl.style.display = "block";
         analyzeOverallEl.style.display = "none";
         analyzeListEl.innerHTML = "";
@@ -877,6 +898,12 @@
             throw new Error(errText);
           }
           const data = await res.json();
+
+          if (data.report_html && downloadReportBtnEl) {
+            currentReportHtml = data.report_html;
+            currentReportFilename = data.report_filename || `pdf_compare_report_${Date.now()}.html`;
+            downloadReportBtnEl.style.display = "inline-flex";
+          }
 
           const pages = data.pages || [];
           const summary = data.summary || {};

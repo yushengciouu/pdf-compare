@@ -134,3 +134,5 @@ class AnalyzeResponse(BaseModel):
     pages: list[PageAnalysisResult] = Field(default_factory=list)
     render_id: str | None = None
     all_slots: list[AnalyzeSlotInfo] = Field(default_factory=list)
+    report_html: str | None = None
+    report_filename: str | None = None

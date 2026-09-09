@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     llm_timeout_sec: int = 600  # 單次 LLM 請求逾時秒數
     llm_debug_dump: bool = False  # 是否儲存 LLM 除錯截圖與 prompt（預設關閉，不留硬碟殘留）
 
+    # HTML 報告與記錄儲存設定
+    log_dir: Path = Path("log")
+    log_retention_days: int = 14  # HTML 報告保留天數（預設兩週，超過自動清理）
+
     model_config = SettingsConfigDict(env_file=".env", env_prefix="PDF_COMPARE_")
 
     @property
