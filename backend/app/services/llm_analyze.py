@@ -825,29 +825,25 @@ def _persist_renders(
     render_id 格式：analyze-{uuid}，掛載在 jobs_root 下。
     """
     render_id = f"analyze-{uuid4()}"
-    persistent_root = settings.jobs_root / render_id / "render"
-    (persistent_root / "before").mkdir(parents=True, exist_ok=True)
-    (persistent_root / "after").mkdir(parents=True, exist_ok=True)
-
-    for src in before_render_dir.glob("*.png"):
-        shutil.copy2(src, persistent_root / "before" / src.name)
-    for src in after_render_dir.glob("*.png"):
-        shutil.copy2(src, persistent_root / "after" / src.name)
 
     all_slots: list[dict] = []
     for entry in sorted(all_pages, key=lambda x: int(x["slot"])):
         bp = entry.get("before_page")
         ap = entry.get("after_page")
-        before_image = (
-            f"/static/jobs/{render_id}/render/before/{int(bp):04d}.png"
-            if bp is not None
-            else None
-        )
-        after_image = (
-            f"/static/jobs/{render_id}/render/after/{int(ap):04d}.png"
-            if ap is not None
-            else None
-        )
+
+        before_image = None
+        if bp is not None:
+            img_file = before_render_dir / f"{int(bp):04d}.png"
+            if img_file.exists():
+                raw = img_file.read_bytes()
+                before_image = f"data:image/png;base64,{base64.b64encode(raw).decode('ascii')}"
+
+        after_image = None
+        if ap is not None:
+            img_file = after_render_dir / f"{int(ap):04d}.png"
+            if img_file.exists():
+                raw = img_file.read_bytes()
+                after_image = f"data:image/png;base64,{base64.b64encode(raw).decode('ascii')}"
 
         # 根據 LLM changes 在 PDF 文字層搜尋差異位置（Plan B）
         before_text_boxes: list[dict] = []

@@ -1,3 +1,4 @@
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 
@@ -9,9 +10,7 @@ class Settings(BaseSettings):
     app_env: str = "dev"
     api_prefix: str = "/api"
 
-    storage_root: Path = Path(
-        r"C:\Users\felix_chiu\Desktop\project\pdf-compare\var\compare"
-    )
+    storage_root: Path = Path(tempfile.gettempdir()) / "pdf_compare"
     frontend_dir: Path | None = None
     jobs_dir_name: str = "jobs"
     max_pdf_mb: int = 50

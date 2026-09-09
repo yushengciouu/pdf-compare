@@ -173,16 +173,21 @@ def generate_html_report(
         bp = entry.get("before_page")
         ap = entry.get("after_page")
 
-        # 嘗試從磁碟載入 PNG 並轉為 Base64
-        before_b64 = None
-        after_b64 = None
-        if settings is not None and render_id:
-            if bp is not None:
-                p_path = settings.jobs_root / render_id / "render" / "before" / f"{int(bp):04d}.png"
-                before_b64 = _load_image_base64(p_path)
-            if ap is not None:
-                p_path = settings.jobs_root / render_id / "render" / "after" / f"{int(ap):04d}.png"
-                after_b64 = _load_image_base64(p_path)
+        # 優先使用 entry 內已轉換好的 Base64 Data URI
+        before_b64 = entry.get("before_image")
+        after_b64 = entry.get("after_image")
+        if before_b64 and not before_b64.startswith("data:"):
+            before_b64 = None
+        if after_b64 and not after_b64.startswith("data:"):
+            after_b64 = None
+
+        # 若未提供 base64，才嘗試從磁碟載入
+        if not before_b64 and settings is not None and render_id and bp is not None:
+            p_path = settings.jobs_root / render_id / "render" / "before" / f"{int(bp):04d}.png"
+            before_b64 = _load_image_base64(p_path)
+        if not after_b64 and settings is not None and render_id and ap is not None:
+            p_path = settings.jobs_root / render_id / "render" / "after" / f"{int(ap):04d}.png"
+            after_b64 = _load_image_base64(p_path)
 
         before_boxes = entry.get("before_text_boxes") or []
         after_boxes = entry.get("after_text_boxes") or []

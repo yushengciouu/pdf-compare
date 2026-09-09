@@ -77,17 +77,15 @@ settings = get_settings()
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.include_router(compare_router, prefix=settings.api_prefix)
 
-settings.jobs_root.mkdir(parents=True, exist_ok=True)
-app.mount("/static/jobs", StaticFiles(directory=settings.jobs_root), name="jobs-static")
-
 frontend_dir = None
 if settings.frontend_dir is not None:
     frontend_dir = Path(settings.frontend_dir)
 else:
     candidates = [
-        settings.storage_root.parent.parent / "frontend",
+        Path(__file__).resolve().parents[2] / "frontend",
+        Path.cwd() / "frontend",
         Path.cwd().parent / "frontend",
-        Path(__file__).resolve().parents[3] / "frontend",
+        Path("/frontend"),
     ]
     for candidate in candidates:
         if candidate.exists():
