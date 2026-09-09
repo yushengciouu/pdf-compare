@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.2
     llm_analyze_dpi: int = 72  # 傳給 LLM 的縮圖解析度，越低 token 越少
     llm_timeout_sec: int = 600  # 單次 LLM 請求逾時秒數
+    llm_debug_dump: bool = False  # 是否儲存 LLM 除錯截圖與 prompt（預設關閉，不留硬碟殘留）
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="PDF_COMPARE_")
 

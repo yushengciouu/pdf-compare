@@ -659,13 +659,16 @@ def _build_prompt(
     ]
 
 
-def _dump_llm_debug(messages: list[dict], settings: Settings, raw_response: str | None = None) -> Path:
+def _dump_llm_debug(messages: list[dict], settings: Settings, raw_response: str | None = None) -> Path | None:
     """
     將送給 LLM 的 messages 存到 <storage_root>/llm_debug/<timestamp>/，
     圖片另存為 PNG 檔案，JSON 中以相對路徑取代 base64。
     若提供 raw_response，一併存為 response.txt。
-    回傳 dump 目錄路徑。
+    回傳 dump 目錄路徑。若未開啟 dump 設定則直接返回 None。
     """
+    if not getattr(settings, "llm_debug_dump", False):
+        return None
+
     ts = f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
     debug_root = settings.storage_root / "llm_debug" / ts
     debug_root.mkdir(parents=True, exist_ok=True)
