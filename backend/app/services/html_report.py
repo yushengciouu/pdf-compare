@@ -572,6 +572,8 @@ def generate_html_report(
       z-index: 2;
     }}
     .analyze-page-card {{
+      display: flex;
+      flex-direction: column;
       border: 1px solid var(--border);
       background: #fff;
       border-radius: 8px;
@@ -579,6 +581,7 @@ def generate_html_report(
       padding: 8px;
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
       transition: outline 0.2s ease;
+      box-sizing: border-box;
     }}
     .analyze-page-head {{
       display: flex;
@@ -615,14 +618,19 @@ def generate_html_report(
       pointer-events: all;
     }}
     .placeholder-box {{
-      height: 200px;
+      flex: 1;
+      width: 100%;
+      min-height: 240px;
       display: flex;
       align-items: center;
       justify-content: center;
-      background: #f1f5f9;
+      background: #f8fafc;
       color: #94a3b8;
+      border: 2px dashed #cbd5e1;
       border-radius: 6px;
-      font-size: 13px;
+      font-size: 14px;
+      font-weight: 500;
+      box-sizing: border-box;
     }}
     .footer {{
       text-align: center;
@@ -737,7 +745,36 @@ def generate_html_report(
         }}
         svg.appendChild(rect);
       }}
+      scheduleSyncHeights();
     }}
+
+    let syncHeightTimer = null;
+    function scheduleSyncHeights() {{
+      if (syncHeightTimer) clearTimeout(syncHeightTimer);
+      syncHeightTimer = setTimeout(syncCardHeights, 40);
+    }}
+
+    function syncCardHeights() {{
+      const beforeCards = document.querySelectorAll("#analyzeBrowserBeforePages .analyze-page-card");
+      beforeCards.forEach((beforeCard) => {{
+        const slotId = beforeCard.id.replace("analyze-before-slot-", "");
+        const afterCard = document.getElementById(`analyze-after-slot-${{slotId}}`);
+        if (!afterCard) return;
+        beforeCard.style.minHeight = "";
+        afterCard.style.minHeight = "";
+        const maxH = Math.max(beforeCard.offsetHeight, afterCard.offsetHeight);
+        beforeCard.style.minHeight = `${{maxH}}px`;
+        afterCard.style.minHeight = `${{maxH}}px`;
+      }});
+    }}
+
+    window.addEventListener("load", () => {{
+      syncCardHeights();
+      setTimeout(syncCardHeights, 150);
+      setTimeout(syncCardHeights, 600);
+      setTimeout(syncCardHeights, 1500);
+    }});
+    window.addEventListener("resize", scheduleSyncHeights);
 
     function jumpToSlot(slotId) {{
       const browser = document.getElementById("analyzeBrowser");
